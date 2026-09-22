@@ -64,15 +64,18 @@ class JarvisManager:
             return False
 
     def restart(self) -> bool:
-        """Start a new instance, then terminate this process."""
+        """Start a new instance and terminate this process exactly once."""
         if self._busy:
             return False
         self._busy = True
         if not self.start_new_instance():
             self._busy = False
             return False
+
         self._log("SYS: Restarting JARVIS.")
-        return True
+        # The new process is now responsible for JARVIS. The old process must
+        # exit or both instances will keep listening to the same microphone.
+        os._exit(0)
 
     def shutdown(self) -> None:
         """Terminate the current JARVIS process immediately."""
