@@ -1063,13 +1063,22 @@ class JarvisLive:
 
     async def _lifecycle_action(self, action: str) -> None:
         self.ui.write_log(f"SYS: {action.title()} requested.")
-        if action == "restart":
+        # A restart/shutdown requested while offline must not wait on an LLM
+        # session summary. Summaries are only attempted for a live session.
+        if self.session:
             await self._save_session_summary()
+            try:
+                await self.session.send_client_content(
+                    turns={"role": "user", "parts": [{"text": "Give the user one brief sentence confirming that JARVIS is " + action + "ing."}]},
+                    turn_complete=True,
+                )
+            except Exception:
+                pass
+        if action == "restart":
             await asyncio.sleep(0.8)
             if not self._manager.restart():
                 self.ui.write_log("ERR: JARVIS restart failed.")
         elif action == "shutdown":
-            await self._save_session_summary()
             await asyncio.sleep(0.8)
             self._manager.shutdown()
 
