@@ -1035,6 +1035,52 @@ class JarvisLive:
         if low in ("what app is open", "what is open", "which app is open", "what am i using", "what window is open"):
             self.ui.write_log("SYS: " + self._active_app_context().replace("\n", " | "))
             return True
+
+        # Local stopwatch controls: no Gemini round trip is needed for timing.
+        stopwatch_cmds = {
+            "start stopwatch": "start",
+            "begin stopwatch": "start",
+            "pause stopwatch": "pause",
+            "resume stopwatch": "resume",
+            "stop stopwatch": "stop",
+            "reset stopwatch": "reset",
+            "stopwatch status": "status",
+            "check stopwatch": "status",
+            "lap stopwatch": "lap",
+            "record lap": "lap",
+        }
+        if low in stopwatch_cmds:
+            self._run_local_action("stopwatch", {"action": stopwatch_cmds[low]})
+            return True
+
+        # Local Wi-Fi and Bluetooth controls. These are intentionally explicit
+        # so "turn Wi-Fi off" does not depend on the cloud model being alive.
+        if "wi-fi" in low or "wifi" in low:
+            if any(x in low for x in ("turn on", "switch on", "enable", "start")):
+                self._run_local_action("windows_settings", {"action": "wifi", "mode": "on"})
+                return True
+            if any(x in low for x in ("turn off", "switch off", "disable", "stop")):
+                self._run_local_action("windows_settings", {"action": "wifi", "mode": "off"})
+                return True
+            if any(x in low for x in ("status", "is wifi", "is wi-fi")):
+                self._run_local_action("windows_settings", {"action": "wifi", "mode": "status"})
+                return True
+
+        if "bluetooth" in low or "blue tooth" in low:
+            if any(x in low for x in ("turn on", "switch on", "enable", "start")):
+                self._run_local_action("windows_settings", {"action": "bluetooth", "mode": "on"})
+                return True
+            if any(x in low for x in ("turn off", "switch off", "disable", "stop")):
+                self._run_local_action("windows_settings", {"action": "bluetooth", "mode": "off"})
+                return True
+            if any(x in low for x in ("status", "is bluetooth", "is blue tooth")):
+                self._run_local_action("windows_settings", {"action": "bluetooth", "mode": "status"})
+                return True
+
+        if low in ("open windows settings", "open windows settings app", "windows settings"):
+            self._run_local_action("windows_settings", {"action": "open", "page": "system"})
+            return True
+
         if low in ("mute", "mute jarvis") or low.endswith("mute my computer"):
             try:
                 self._run_local_action("computer_settings", {"action": "mute"})
