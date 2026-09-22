@@ -363,7 +363,8 @@ TOOL_DECLARATIONS = [
                 "x": {"type": "INTEGER", "description": "Optional crop X offset within the selected monitor."},
                 "y": {"type": "INTEGER", "description": "Optional crop Y offset within the selected monitor."},
                 "width": {"type": "INTEGER", "description": "Optional crop width."},
-                "height": {"type": "INTEGER", "description": "Optional crop height."}
+                "height": {"type": "INTEGER", "description": "Optional crop height."},
+                "zoom": {"type": "NUMBER", "description": "Optional zoom factor from 1.0 to 4.0 for small screen regions."}
             },
             "required": ["text"]
         }
@@ -1423,6 +1424,7 @@ class JarvisLive:
                     angle     = args.get("angle", "screen").lower()
                     user_text = args.get("text", "What do you see?")
                     monitor   = args.get("monitor", 1)
+                    zoom      = args.get("zoom", 1.0)
                     region = None
                     if any(k in args for k in ("x", "y", "width", "height")):
                         region = {
@@ -1440,7 +1442,7 @@ class JarvisLive:
                         vision_meta = "webcam"
                     else:
                         img_b, mime_t = await loop.run_in_executor(
-                            None, lambda: _capture_screen(monitor=monitor, region=region)
+                            None, lambda: _capture_screen(monitor=monitor, region=region, zoom=zoom)
                         )
                         print(f"[Vision] 🖥️  Screen monitor {monitor}: {len(img_b):,} bytes")
                         _stall = "screen"
