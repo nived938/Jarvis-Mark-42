@@ -131,7 +131,6 @@ class WakeWordDetector:
         self._model = None
         self._phrase_stt = None
         self._ready = False
-        self._phrase_stt = None
         self._last_phrase_wake = 0.0
 
     def start(self) -> bool:
