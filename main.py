@@ -358,7 +358,12 @@ TOOL_DECLARATIONS = [
             "type": "OBJECT",
             "properties": {
                 "angle": {"type": "STRING", "description": "'screen' to capture display, 'camera' for webcam. Default: 'screen'"},
-                "text":  {"type": "STRING", "description": "The question or instruction about the captured image"}
+                "text":  {"type": "STRING", "description": "The question or instruction about the captured image"},
+                "monitor": {"type": "INTEGER", "description": "Physical monitor number, starting at 1."},
+                "x": {"type": "INTEGER", "description": "Optional crop X offset within the selected monitor."},
+                "y": {"type": "INTEGER", "description": "Optional crop Y offset within the selected monitor."},
+                "width": {"type": "INTEGER", "description": "Optional crop width."},
+                "height": {"type": "INTEGER", "description": "Optional crop height."}
             },
             "required": ["text"]
         }
@@ -1560,22 +1565,7 @@ class JarvisLive:
                     result = "Specify action (add/remove/list) and a topic."
 
             elif name == "shutdown_jarvis":
-                self.ui.write_log("SYS: Shutdown requested.")
-                async def _do_shutdown():
-                    await self._save_session_summary()
-                    if self.session:
-                        try:
-                            await self.session.send_client_content(
-                                turns={"role": "user", "parts": [{"text": "Say a brief natural goodbye to the user."}]},
-                                turn_complete=True,
-                            )
-                        except Exception:
-                            pass
-                    await asyncio.sleep(1.5)
-                    import os as _os
-                    _os._exit(0)
-                asyncio.create_task(_do_shutdown())
-
+                asyncio.create_task(self._lifecycle_action("shutdown"))
             elif self._action_registry.has(name):
                 # file_processor: fall back to the currently-uploaded file when none is given
                 if name == "file_processor" and not args.get("file_path") and self.ui.current_file:
@@ -1584,6 +1574,8 @@ class JarvisLive:
                         "response": None, "session_memory": None}
                 r = await loop.run_in_executor(None, lambda: self._action_registry.run(name, args, _ctx))
                 result = r or "Done."
+                if name == "file_controller" and bool(args.get("preview", False)):
+                    self.ui.show_content("FILE OPERATION PREVIEW", str(result))
                 # web_search: mirror results to the on-screen content panel
                 if (name == "web_search" and r
                         and not r.startswith("No results")
