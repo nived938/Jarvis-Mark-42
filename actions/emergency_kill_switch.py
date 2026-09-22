@@ -55,7 +55,7 @@ TOOL = {
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": "trigger | release | status"
+                "description": "trigger | status | release (local/HUD only)"
             }
         },
         "required": ["action"]
