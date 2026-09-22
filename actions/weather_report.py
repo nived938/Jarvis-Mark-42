@@ -262,10 +262,22 @@ def weather_action(parameters: dict, player=None, session_memory=None) -> str:
     try:
         payload, query, mode = _load_weather(p)
         current_text = _format_current(payload)
+
+        # The current card is useful even when the subscription does not expose
+        # forecast data, so publish it before attempting the optional forecast call.
+        _push_hud(player, payload, current_text)
+
         detailed = current_text
         if report in {"forecast", "full", "detailed"}:
-            forecast_data = _fetch_forecast(query, days)
-            detailed = current_text + "\n\n" + _format_forecast(forecast_data, days)
+            try:
+                forecast_data = _fetch_forecast(query, days)
+                detailed = current_text + "\n\n" + _format_forecast(forecast_data, days)
+            except Exception as forecast_error:
+                detailed = (
+                    current_text
+                    + "\n\nForecast unavailable: "
+                    + str(forecast_error)
+                )
 
         _push_hud(player, payload, detailed)
 
