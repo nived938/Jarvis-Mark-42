@@ -80,6 +80,7 @@ from memory.config_manager     import (
 from core.plugin_loader        import discover_plugins
 from core                      import undo as undo_stack
 from core                      import confirm as confirm_gate
+from core                      import emergency as emergency_stop
 from core                      import audio_devices
 from core.action_loader        import discover_actions
 from core.echo                 import EchoGuard
@@ -91,6 +92,7 @@ from core.wake_word            import (
 from actions.workflow_recorder import record_tool_call
 from actions.notification_inbox import add_notification
 from actions.focus_mode import is_active as focus_mode_active
+from actions.weather_report import start_auto_refresh as start_weather_auto_refresh
 
 # How long the assistant stays awake with no user speech before it auto-sleeps
 # again (wake-word mode only).
@@ -677,6 +679,7 @@ class JarvisLive:
         self.ui.on_text_command   = self._on_text_command
         self.ui.on_remote_clicked = self._make_remote_key
         self.ui.on_interrupt      = self.interrupt
+        self.ui.on_emergency_kill = self.emergency_kill
         self.ui.on_voice_change   = self._on_voice_change     # voice picker → rebuild session
         self.ui.on_audio_device_change = self._on_audio_device_change
         self._reconnect_event: asyncio.Event | None = None
@@ -733,6 +736,12 @@ class JarvisLive:
         )
         self.ui.get_plugins = self._plugin_registry.list_for_ui
         self.ui.get_plugin_settings = self._plugin_registry.settings_schemas  # ⚙ settings tab
+        try:
+            emergency_stop.bind(self._on_emergency_state)
+            self.ui.set_emergency_active(emergency_stop.is_active())
+        except Exception as e:
+            print(f"[Emergency] Bind failed: {e}")
+        start_weather_auto_refresh(self.ui)
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
 
         # ── Wake word ────────────────────────────────────────────────────────
@@ -872,6 +881,8 @@ class JarvisLive:
         exactly like a proactive check-in; Gemini phrases it naturally in the
         user's language. Silently a no-op when no session is connected.
         """
+        if emergency_stop.is_active():
+            return
         loop = getattr(self, "_loop", None)
         if not loop or not self.session:
             return
@@ -951,9 +962,13 @@ class JarvisLive:
         return url, key, f"{url}/auto-login?key={key}", manual
 
     def _on_text_command(self, text: str):
-        # Local computer commands are available even if Gemini is disconnected.
+        # Emergency release/trigger is deliberately handled before the global
+        # emergency latch check so the user can always unlock JARVIS locally.
         local = self._queue_local_command(text)
         if local:
+            return
+        if emergency_stop.is_active():
+            self.ui.write_log("SYS: Emergency stop is active — command blocked.")
             return
         if not self._loop or not self.session:
             self.ui.write_log("SYS: Gemini is not connected; only local commands are available.")
@@ -1036,6 +1051,38 @@ class JarvisLive:
             self.ui.write_log("SYS: " + self._active_app_context().replace("\n", " | "))
             return True
 
+        # Emergency stop controls are always local and remain available
+        # even while the emergency latch is engaged so release can never depend
+        # on the cloud model.
+        if any(k in low for k in (
+            "emergency stop", "emergency kill switch", "kill switch",
+            "stop everything", "panic stop", "panic"
+        )):
+            self._run_local_action("emergency_kill_switch", {"action": "trigger"})
+            return True
+        if any(k in low for k in (
+            "release emergency stop", "clear emergency stop",
+            "unlock jarvis", "resume jarvis"
+        )):
+            self._run_local_action("emergency_kill_switch", {"action": "release"})
+            return True
+
+        # Weather is a direct local API action — never route weather requests
+        # through browser search or generic web_search.
+        if (
+            low == "weather"
+            or low.startswith("weather ")
+            or "what's the weather" in low
+            or "what is the weather" in low
+            or low.startswith("weather in ")
+        ):
+            city = ""
+            m_weather = _re.search(r"\bweather\s+(?:in|at|for)\s+(.+)$", raw, _re.IGNORECASE)
+            if m_weather:
+                city = m_weather.group(1).strip()
+            self._run_local_action("weather_report", {"city": city, "report": "current"})
+            return True
+
         # Local stopwatch controls: no Gemini round trip is needed for timing.
         stopwatch_cmds = {
             "start stopwatch": "start",
@@ -1107,6 +1154,10 @@ class JarvisLive:
 
     def _run_local_action(self, name: str, args: dict) -> str:
         try:
+            if emergency_stop.is_active() and name != "emergency_kill_switch":
+                result = "Emergency stop is active. The requested local action was not performed."
+                self.ui.write_log("SYS: " + result)
+                return result
             if self._action_registry.has(name):
                 result = self._action_registry.run(
                     name, args, {"player": self.ui, "speak": self.speak, "response": None, "session_memory": None}
@@ -1120,6 +1171,69 @@ class JarvisLive:
         except Exception as e:
             self.ui.write_log(f"ERR: Local command failed — {e}")
             return str(e)
+
+    def _on_emergency_state(self, reason: str) -> None:
+        """React immediately when the emergency latch is engaged or released."""
+        active = emergency_stop.is_active()
+        try:
+            self.ui.set_emergency_active(active)
+        except Exception:
+            pass
+        if active:
+            try:
+                confirm_gate.resolve(False)
+            except Exception:
+                pass
+            self.interrupt()
+            try:
+                self.ui.stop_camera_stream()
+            except Exception:
+                pass
+            self._awake = False
+            self._manual_sleep = True
+            self._ptt_held = False
+            if self._ptt is not None:
+                try:
+                    self._ptt.stop()
+                except Exception:
+                    pass
+            if self._loop and self.session:
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        self.session.send_client_content(
+                            turns={"role": "user", "parts": [{"text": "[EMERGENCY STOP] Do not speak or execute further actions."}]},
+                            turn_complete=False,
+                        ),
+                        self._loop,
+                    )
+                except Exception:
+                    pass
+            self.ui.set_state("SLEEPING")
+            self.ui.write_log("SYS: EMERGENCY STOP engaged — JARVIS-controlled activity blocked.")
+        else:
+            self._manual_sleep = False
+            self._awake = not self._wake_enabled
+            if self._wake_enabled:
+                try:
+                    self._ensure_wake_detector()
+                except Exception:
+                    pass
+            try:
+                self.ui.set_emergency_active(False)
+            except Exception:
+                pass
+            if self._awake and not self.ui.muted:
+                self.ui.set_state("LISTENING")
+            else:
+                self.ui.set_state("SLEEPING")
+            self.ui.write_log("SYS: Emergency stop released.")
+
+    def emergency_kill(self, engage: bool = True, reason: str = "HUD emergency control") -> None:
+        """Engage or release the fail-closed JARVIS activity latch."""
+        if engage:
+            emergency_stop.trigger(reason)
+        else:
+            emergency_stop.release(reason)
 
     async def _lifecycle_action(self, action: str) -> None:
         """Perform a JARVIS process lifecycle action without involving Gemini."""
@@ -1230,6 +1344,8 @@ class JarvisLive:
         self.ui.write_log("SYS: Interrupted — listening...")
 
     def speak(self, text: str):
+        if emergency_stop.is_active():
+            return
         if not self._loop or not self.session:
             return
         asyncio.run_coroutine_threadsafe(
@@ -1413,6 +1529,15 @@ class JarvisLive:
         args = dict(fc.args or {})
 
         print(f"[JARVIS] 🔧 {name}  {args}")
+
+        if emergency_stop.is_active() and name != "emergency_kill_switch":
+            self.ui.write_log(f"SYS: Emergency stop blocked tool '{name}'.")
+            return types.FunctionResponse(
+                id=fc.id,
+                name=name,
+                response={"result": "Emergency stop is active. Action not performed.", "blocked": True},
+            )
+
         self.ui.set_state("THINKING")
 
         # When workflow recording is active, capture the exact tool call so the
