@@ -1068,8 +1068,14 @@ class JarvisLive:
         if self.session:
             await self._save_session_summary()
             try:
+                lifecycle_phrase = {
+                    "restart": "restarting",
+                    "shutdown": "shutting down",
+                }.get(action, action)
                 await self.session.send_client_content(
-                    turns={"role": "user", "parts": [{"text": "Give the user one brief sentence confirming that JARVIS is " + action + "ing."}]},
+                    turns={"role": "user", "parts": [{
+                        "text": f"Give the user one brief sentence confirming that JARVIS is {lifecycle_phrase}."
+                    }]},
                     turn_complete=True,
                 )
             except Exception:
