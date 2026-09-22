@@ -88,6 +88,9 @@ from Jarvis_Manager            import JarvisManager
 from core.wake_word            import (
     WakeWordDetector, is_ready as wake_is_ready, install_and_download as wake_install,
 )
+from actions.workflow_recorder import record_tool_call
+from actions.notification_inbox import add_notification
+from actions.focus_mode import is_active as focus_mode_active
 
 # How long the assistant stays awake with no user speech before it auto-sleeps
 # again (wake-word mode only).
@@ -1042,6 +1045,16 @@ class JarvisLive:
         if m and not any(x in low for x in ("website", "url", "http")):
             app_name = m.group(1).strip()
             if app_name:
+                # Try the idle-built personal file index first. This makes
+                # "open my project file" fast without another model round trip.
+                try:
+                    from actions.file_indexer import file_indexer
+                    indexed = str(file_indexer({"action": "open", "query": app_name}))
+                    if indexed.startswith("Opened "):
+                        self.ui.write_log("SYS: " + indexed)
+                        return True
+                except Exception:
+                    pass
                 self._run_local_action("open_app", {"app_name": app_name})
                 return True
         return False
@@ -1356,6 +1369,12 @@ class JarvisLive:
         print(f"[JARVIS] 🔧 {name}  {args}")
         self.ui.set_state("THINKING")
 
+        # When workflow recording is active, capture the exact tool call so the
+        # user can replay the workflow later. The recorder ignores its own calls.
+        try:
+            record_tool_call(name, args)
+        except Exception:
+            pass
 
         if name == "save_memory":
             category = args.get("category", "notes")
@@ -2271,6 +2290,8 @@ class JarvisLive:
             alert = await asyncio.to_thread(self._sys_monitor.check)
             if not alert or not self.session or not self._awake:
                 continue
+            if focus_mode_active():
+                continue
             # Don't interrupt an active conversation
             with self._speaking_lock:
                 speaking = self._is_speaking
@@ -2307,6 +2328,13 @@ class JarvisLive:
                                 f"Inform the user about this development naturally in {lang}. "
                                 "One brief sentence only."
                             )
+                            add_notification(
+                                "Background monitor",
+                                alert.replace("[MONITOR_ALERT] ", "").strip(),
+                                "background_monitor",
+                            )
+                            if focus_mode_active():
+                                continue
                             await self.session.send_client_content(
                                 turns={"role": "user", "parts": [{"text": msg}]},
                                 turn_complete=True,
@@ -2328,7 +2356,7 @@ class JarvisLive:
         while True:
             await asyncio.sleep(60)   # evaluate once per minute
 
-            if not self.session or not self._awake:
+            if not self.session or not self._awake or focus_mode_active():
                 continue
 
             with self._speaking_lock:
