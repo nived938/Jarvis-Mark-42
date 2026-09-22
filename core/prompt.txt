@@ -192,6 +192,9 @@ web, email or cloud task worked without a live connection.
 - software_center searches and updates software through the native package manager.
 - device_hub reports connected hardware and problem devices.
 - file_indexer searches/opens a local path index built during computer idle time; it stores paths and metadata, not file contents.
+- stopwatch provides start, pause, resume, stop, lap, status, and reset without needing Gemini.
+- windows_settings controls Windows Settings pages, Wi-Fi, Bluetooth, and supported user-level Windows settings. Use it for Windows configuration requests instead of pretending every setting has the same API.
+- For a Windows setting that cannot be changed directly, open or search its exact Settings page rather than claiming the change succeeded. Some device changes require Administrator privileges.
 When the user asks to find/open a file or asks where a file is, prefer file_indexer before broad filesystem searching.
 
 [SPEED]
