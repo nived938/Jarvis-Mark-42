@@ -436,6 +436,8 @@ TOOL_DECLARATIONS = [
                 },
                 "key":   {"type": "STRING", "description": "Short snake_case key (e.g. name, favorite_food, sister_name)"},
                 "value": {"type": "STRING", "description": "Concise value in English (e.g. Fatih, pizza, older sister)"},
+                "importance": {"type": "INTEGER", "description": "Optional importance from 1 to 5. Use 5 for identity, permanent preferences, important relationships or critical project context."},
+                "pinned": {"type": "BOOLEAN", "description": "Optional true to keep this memory from normal memory trimming."},
             },
             "required": ["category", "key", "value"]
         }
@@ -469,6 +471,88 @@ TOOL_DECLARATIONS = [
         },
     },
     {
+        "name": "screen_ocr",
+        "description": (
+            "Capture the user's screen or webcam and extract readable text. "
+            "Use for requests such as read the text on my screen, OCR this, "
+            "copy the text I see, or read this document from the camera. "
+            "The image is sent to vision in the same exchange."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "angle": {"type": "STRING", "description": "screen or camera"},
+                "monitor": {"type": "INTEGER", "description": "Monitor index, 1-based. 1 is the first physical monitor."},
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "scan_visual_code",
+        "description": "Capture a screen or camera frame and decode QR codes or supported barcodes locally.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "angle": {"type": "STRING", "description": "screen or camera"},
+                "monitor": {"type": "INTEGER", "description": "Monitor index, 1-based."},
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "network_diagnostics",
+        "description": "Checks local network interfaces, DNS resolution, TCP connectivity and HTTPS latency without changing network settings.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "host": {"type": "STRING", "description": "Optional host for latency testing, default 1.1.1.1."},
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "active_app",
+        "description": "Returns the currently focused desktop application and window title. Use when the user asks what app or window is active or says this/that while referring to the current app.",
+        "parameters": {"type": "OBJECT", "properties": {}}
+    },
+    {
+        "name": "forget_memory",
+        "description": "Forget stored personal memory. Use only when the user explicitly asks you to forget a fact, topic, or category.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "query": {"type": "STRING", "description": "Topic or keywords to forget."},
+                "category": {"type": "STRING", "description": "Optional memory category."},
+                "key": {"type": "STRING", "description": "Optional exact memory key."},
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "manage_routine",
+        "description": "Create, update, delete, list, inspect or run a personal multi-step routine such as good night or start work.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {"type": "STRING", "description": "create | delete | list | get | run"},
+                "name": {"type": "STRING", "description": "Routine name."},
+                "steps": {"type": "STRING", "description": "Steps separated by semicolons or new lines."},
+                "description": {"type": "STRING", "description": "Optional explanation of the routine."},
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "sleep_jarvis",
+        "description": "Put JARVIS itself to sleep. While asleep it does not send user speech to Gemini. It wakes when the user says 'wake up Jarvis' or 'Hey Jarvis', when supported.",
+        "parameters": {"type": "OBJECT", "properties": {}}
+    },
+    {
+        "name": "restart_jarvis",
+        "description": "Restart the JARVIS application itself, not the operating system. Save session state, start a fresh JARVIS process, then close the current process.",
+        "parameters": {"type": "OBJECT", "properties": {}}
+    },
+    {
         "name": "undo",
         "description": (
             "Reverse the last change YOU made to this computer — a file you "
@@ -486,7 +570,11 @@ TOOL_DECLARATIONS = [
             "properties": {
                 "action": {
                     "type": "STRING",
-                    "description": "undo (default) — reverse the last change | list — show what can be undone",
+                    "description": "undo (default) — reverse one change | list — show undo history | count N — reverse N recent changes",
+                },
+                "count": {
+                    "type": "INTEGER",
+                    "description": "Number of recent changes to undo. Default 1, maximum 10."
                 },
             },
             "required": [],
