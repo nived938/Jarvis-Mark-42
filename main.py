@@ -1197,17 +1197,6 @@ class JarvisLive:
                     self._ptt.stop()
                 except Exception:
                     pass
-            if self._loop and self.session:
-                try:
-                    asyncio.run_coroutine_threadsafe(
-                        self.session.send_client_content(
-                            turns={"role": "user", "parts": [{"text": "[EMERGENCY STOP] Do not speak or execute further actions."}]},
-                            turn_complete=False,
-                        ),
-                        self._loop,
-                    )
-                except Exception:
-                    pass
             self.ui.set_state("SLEEPING")
             self.ui.write_log("SYS: EMERGENCY STOP engaged — JARVIS-controlled activity blocked.")
         else:
