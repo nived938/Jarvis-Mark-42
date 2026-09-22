@@ -73,6 +73,8 @@ The existing filenames are preserved. New capabilities are implemented as additi
 | 🗺️ Dynamic Content Panel | Scrollable display layer beneath the HUD that renders web results, news, and search data |
 | 🔍 Multi-Mode Web Search | `news` / `research` / `price` / `compare` / `search` — Gemini Grounded first, DDG fallback |
 | ⏰ Smart Reminders | OS-native scheduled notifications (Windows Task Scheduler / macOS LaunchAgent / Linux systemd) |
+| ⏱️ Stopwatch | Persistent stopwatch with start, pause, resume, stop, laps, status, and reset |
+| ⚙️ Windows Settings Control | Opens Windows Settings pages by voice, searches Settings, controls Wi-Fi/Bluetooth, and changes supported user-level settings |
 | ✈️ Flight Finder | Live flight price and availability lookup |
 | 🎮 Game Updater | Checks and triggers game updates on Steam and Epic Games on demand |
 | 📂 File Processor | Read, summarize, and answer questions about local files |
