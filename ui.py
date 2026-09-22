@@ -3083,6 +3083,7 @@ class MainWindow(QMainWindow):
         self._log_sig.connect(self._log.append_log)
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
+        self._weather_sig.connect(self._show_weather)
         self._reconfig_sig.connect(self._show_setup)
         self._camera_sig.connect(self._show_camera_frame)
         self._confirm_sig.connect(self._show_confirm_banner)
@@ -3115,6 +3116,65 @@ class MainWindow(QMainWindow):
         sc_full.activated.connect(self._toggle_fullscreen)
         sc_intr = QShortcut(QKeySequence("Escape"), self)
         sc_intr.activated.connect(self._do_interrupt)
+
+    def _on_emergency_button(self) -> None:
+        try:
+            cb = self.on_emergency_kill
+            if callable(cb):
+                cb(not self._emergency_active)
+        except Exception as e:
+            self._log.append_log(f"ERR: Emergency control failed — {e}")
+
+    def set_emergency_active(self, active: bool) -> None:
+        """Update the emergency-stop button on the Qt thread."""
+        self._emergency_active = bool(active)
+        btn = self._emergency_btn
+        if btn is None:
+            return
+        if self._emergency_active:
+            btn.setText("↺ RELEASE")
+            btn.setToolTip("Release the emergency stop and resume JARVIS")
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    color: {C.ACC2}; background: #221900;
+                    border: 1px solid {C.ACC2}; border-radius: 4px; padding: 2px 8px;
+                }}
+                QPushButton:hover {{ background: #332600; }}
+            """)
+        else:
+            btn.setText("⚠ STOP")
+            btn.setToolTip("Emergency stop — halt JARVIS-controlled activity")
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    color: {C.RED}; background: transparent;
+                    border: 1px solid {C.RED}; border-radius: 4px; padding: 2px 8px;
+                }}
+                QPushButton:hover {{ background: #22000a; }}
+            """)
+
+    def _show_weather(self, payload) -> None:
+        """Keep the compact Weatherstack snapshot visible beside the HUD."""
+        data = dict(payload or {})
+        place = str(data.get("location") or "Unknown").strip()
+        region = str(data.get("region") or "").strip()
+        if region:
+            place = f"{place}, {region}"
+        temp = data.get("temperature")
+        feels = data.get("feelslike")
+        cond = str(data.get("condition") or "Unknown").strip()
+        hum = data.get("humidity")
+        wind = data.get("wind_speed")
+
+        self._weather_place_lbl.setText(f"LOC  {place[:24]}")
+        self._weather_temp_lbl.setText(
+            f"TEMP {temp if temp not in (None, '') else '—'}°C  "
+            f"FEEL {feels if feels not in (None, '') else '—'}°"
+        )
+        self._weather_cond_lbl.setText(cond[:28])
+        self._weather_meta_lbl.setText(
+            f"HUM {hum if hum not in (None, '') else '—'}%  "
+            f"WIND {wind if wind not in (None, '') else '—'} km/h"
+        )
 
     def _show_camera_frame(self, img_bytes: bytes):
         """Slot — display camera preview overlay (main thread)."""
@@ -3769,6 +3829,37 @@ class MainWindow(QMainWindow):
         ip_lay.addWidget(os_lbl)
 
         lay.addWidget(info_panel)
+        lay.addSpacing(4)
+
+        weather_panel = QWidget()
+        weather_panel.setStyleSheet(
+            f"background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 4px;"
+        )
+        weather_lay = QVBoxLayout(weather_panel)
+        weather_lay.setContentsMargins(6, 5, 6, 5)
+        weather_lay.setSpacing(2)
+
+        self._weather_place_lbl = QLabel("LOC  --")
+        self._weather_temp_lbl = QLabel("TEMP --")
+        self._weather_cond_lbl = QLabel("WEATHER --")
+        self._weather_meta_lbl = QLabel("HUM --  WIND --")
+
+        for idx, lbl in enumerate((
+            self._weather_place_lbl, self._weather_temp_lbl,
+            self._weather_cond_lbl, self._weather_meta_lbl
+        )):
+            lbl.setFont(
+                QFont("Courier New", 7,
+                      QFont.Weight.Bold if idx < 2 else QFont.Weight.Normal)
+            )
+            lbl.setStyleSheet(
+                f"color: {C.PRI if idx == 0 else C.TEXT_MED}; "
+                "background: transparent; border: none;"
+            )
+            lbl.setWordWrap(True)
+            weather_lay.addWidget(lbl)
+
+        lay.addWidget(weather_panel)
         lay.addSpacing(4)
 
         lay.addStretch()
