@@ -21,6 +21,12 @@ It's not just an assistant — it's an extension of your digital life.
 
 ---
 
+## 🆕 Mark 43 additions
+
+Mark 43 expands the existing architecture without renaming the original modules. It adds targeted visual/OCR capture, active-app context, personal routines, local network diagnostics, QR/barcode scanning, stronger memory relevance and forgetting controls, multi-step undo, safer file previews, browser tab/page tools, code-edit validation and repair, plus a JARVIS process manager for sleep, wake, restart and shutdown.
+
+The only new source file is `Jarvis_Manager.py`; the other changes are edits to existing project files.
+
 ## 🚀 Capabilities
 
 ### Core Features
@@ -77,6 +83,12 @@ It's not just an assistant — it's an extension of your digital life.
 | ⚡ Auto-Start on Boot | Registers with the OS startup system (registry / LaunchAgent / .desktop) |
 | 📋 Clipboard Intelligence | Copy any text → floating panel with Translate / Summarise / Explain / Fix |
 | 🪪 Assistant Customization | Change the assistant name, your name, voice, and colour from the UI — takes effect immediately |
+| 🛌 JARVIS Sleep | Say "sleep Jarvis" to stop sending user speech to Gemini; say "wake up Jarvis" or "Hey Jarvis" to wake it with the local wake engine |
+| 🔄 JARVIS Lifecycle | Say "restart Jarvis" to restart the app or "shutdown Jarvis" to close the app |
+| 👁️ Targeted Vision | Capture a selected monitor/region, run OCR, and label vision frames with their source |
+| 📱 QR / Barcode Scan | Detect QR codes and supported barcodes locally from the screen or camera |
+| 🌐 Network Diagnostics | Check interfaces, DNS, TCP connectivity and HTTPS latency without changing settings |
+| 🧠 Routine Automation | Save multi-step personal routines and run them through JARVIS tools |
 
 ---
 
@@ -309,6 +321,7 @@ python main.py
 ```
 Mark LIV/
 ├── main.py                   # Core loop — Gemini Live session, audio I/O, viseme extraction, tool dispatch
+├── Jarvis_Manager.py         # Process lifecycle manager — restart and clean application shutdown
 ├── ui.py                     # PyQt6 HUD — avatar canvas, waveform, log panel, settings drawer, camera feed
 ├── setup.py                  # OS-aware installer (skips wrong-OS dependencies, checks your Python)
 ├── .gitignore                # Keeps your API key, TLS key and memories out of the repository
