@@ -45,10 +45,10 @@ def emergency_action(parameters: dict, player=None) -> str:
 TOOL = {
     "name": "emergency_kill_switch",
     "description": (
-        "Engage, release, or check the JARVIS emergency stop. Trigger immediately "
-        "when the user says emergency stop, stop everything, panic, or kill switch. "
-        "While active, JARVIS blocks new tool actions and speech until the user "
-        "explicitly releases it. This controls JARVIS activity, not arbitrary OS processes."
+        "Trigger or check the JARVIS emergency stop. Trigger immediately when the "
+        "user says emergency stop, stop everything, panic, or kill switch. Release is "
+        "available only from the HUD or a local user command; the model cannot release "
+        "its own stop. This controls JARVIS activity, not arbitrary OS processes."
     ),
     "parameters": {
         "type": "OBJECT",
