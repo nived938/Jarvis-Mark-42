@@ -270,10 +270,14 @@ def stage_write(path: str | Path, content: str, reason: str, player=None) -> str
 
 
 def rollback_last() -> str:
-    """Rollback the most recently applied self-modification through undo."""
+    """Rollback a self-modification only when it is the most recent undo entry."""
     from core import undo as undo_stack
     items = undo_stack.history()
-    for index, item in enumerate(items):
-        if item.startswith("self-modified "):
-            return undo_stack.undo_steps(index + 1)
+    if items and items[0].startswith("self-modified "):
+        return undo_stack.undo_last()
+    if any(item.startswith("self-modified ") for item in items):
+        return (
+            "A self-modification exists in undo history, but unrelated changes were made "
+            "after it. Use the normal undo flow so I do not revert those unrelated changes."
+        )
     return "No applied JARVIS self-modification is available in the current session to roll back."
