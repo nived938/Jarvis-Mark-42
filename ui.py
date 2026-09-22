@@ -2920,6 +2920,7 @@ class MainWindow(QMainWindow):
     _log_sig        = pyqtSignal(str)
     _state_sig      = pyqtSignal(str)
     _content_sig    = pyqtSignal(str, str)   # (title, text) — thread-safe content display
+    _weather_sig     = pyqtSignal(object)     # compact live weather payload
     _reconfig_sig   = pyqtSignal()           # trigger setup overlay from any thread
     _camera_sig     = pyqtSignal(bytes)      # show camera frame preview (small overlay)
     _cam_stream_sig = pyqtSignal(bool)       # True=start live stream, False=stop
@@ -2959,6 +2960,9 @@ class MainWindow(QMainWindow):
         self.on_text_command   = None
         self.on_remote_clicked = None   # callable: () -> (url, key) | None
         self.on_interrupt      = None   # callable: () -> None — stop JARVIS mid-speech
+        self.on_emergency_kill = None   # callable: (engage: bool) -> None
+        self._emergency_active = False
+        self._emergency_btn    = None
         self.on_voice_change   = None   # callable: () -> None — rebuild session with new voice
         self.on_audio_device_change = None  # callable: () -> None — reopen audio streams
         self._confirm_overlay  = None   # live ConfirmBanner, if one is on screen
@@ -3659,6 +3663,22 @@ class MainWindow(QMainWindow):
         self._drawer_btn.setCheckable(True)
         self._drawer_btn.clicked.connect(self._toggle_drawer)
         lay.addWidget(self._drawer_btn)
+
+        self._emergency_btn = QPushButton("⚠ STOP")
+        self._emergency_btn.setFixedHeight(26)
+        self._emergency_btn.setMinimumWidth(68)
+        self._emergency_btn.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        self._emergency_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._emergency_btn.setToolTip("Emergency stop — halt JARVIS-controlled activity")
+        self._emergency_btn.setStyleSheet(f"""
+            QPushButton {{
+                color: {C.RED}; background: transparent;
+                border: 1px solid {C.RED}; border-radius: 4px; padding: 2px 8px;
+            }}
+            QPushButton:hover {{ background: #22000a; }}
+        """)
+        self._emergency_btn.clicked.connect(self._on_emergency_button)
+        lay.addWidget(self._emergency_btn)
         lay.addStretch()
 
         mid = QVBoxLayout(); mid.setSpacing(1)
