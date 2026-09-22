@@ -21,6 +21,7 @@ MAX_BUILD_ATTEMPTS = 3
 # forever whenever that one alias was unwell.
 from core import gemini
 from core.undo import push_undo
+from core.self_modification import is_guarded_path, stage_write
 
 
 def _get_api_key() -> str:
@@ -410,6 +411,12 @@ Current code:
         if attempt == 3:
             return f"Edit rejected because validation kept failing: {detail}"
 
+    # Edits to JARVIS itself are never written directly. The generated code
+    # has passed local validation, then goes through the human-owned confirmation
+    # gate in core.self_modification.
+    if is_guarded_path(path):
+        return stage_write(path, edited, reason=instruction, player=player)
+
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(edited, encoding="utf-8")
@@ -513,6 +520,9 @@ Optimized code:"""
         save_path = Path(file_path)
     else:
         save_path = _resolve_save_path(output_path, lang)
+
+    if is_guarded_path(save_path):
+        return stage_write(save_path, optimized, reason="optimize JARVIS source", player=player)
 
     status = _save_file(save_path, optimized)
     print(f"[Code] ✅ Optimized: {save_path}")
