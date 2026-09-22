@@ -13,7 +13,7 @@ A real-time voice AI that can hear, see, speak, and control your computer — on
 
 It ships as **zero extra dependencies and one 25 KB asset**. The face is real measured human geometry; everything else — the skull, the rig, the lighting — is generated at startup and drawn in software, so it looks identical on a gaming rig and a 2013 laptop, with no GPU driver in the loop.
 
-The face is also the fastest status indicator in the app: it looks away while thinking, meets your eyes while listening, and lets its lids fall while asleep.
+The face is also the fastest status indicator in the app: it looks away while thinking, meets your eyes while listening, and lets its lids fall while asleep.\n\n### 🌦️ Weatherstack HUD\nWeather is handled through the Weatherstack API rather than browser search. With no city in the request, JARVIS first determines the public IP and lets Weatherstack resolve that approximate location. The current report is shown in a compact card beside the HUD and the full report appears in the existing content panel; automatic refresh runs periodically while JARVIS is open.
 
 Underneath, Mark LIV rebuilt how the assistant knows itself — what it is, what machine it runs on, what it can do and, new, **what it cannot do** — all assembled from the live system at session start rather than written into a prompt that goes stale.
 
@@ -26,7 +26,7 @@ It's not just an assistant — it's an extension of your digital life.
 Mark 43 expands the existing architecture without renaming the original modules. It adds targeted visual/OCR capture, active-app context, personal routines, local network diagnostics, QR/barcode scanning, stronger memory relevance and forgetting controls, multi-step undo, safer file previews, browser tab/page tools, code-edit validation and repair, plus a JARVIS process manager for sleep, wake, restart and shutdown.
 
 This feature expansion also adds speaker identity profiles, a personal activity timeline, goal/OKR tracking, a workflow recorder, a local notification inbox, JARVIS Focus Mode, clipboard history, a read-only JARVIS Doctor, per-application Windows audio control, software update management, connected-device inventory, and an idle-time file path index for fast file discovery/opening.
-It also adds a persistent stopwatch and a Windows Settings controller with broad Settings-page navigation, Wi-Fi/Bluetooth controls, and supported direct user-level settings changes. Existing filenames are preserved; these are additional action modules and targeted edits.
+It also adds a persistent stopwatch and a Windows Settings controller with broad Settings-page navigation, Wi-Fi/Bluetooth controls, and supported direct user-level settings changes.\nThe new Mark 43 safety layer adds a fail-closed Emergency Kill Switch and guarded JARVIS Self-Modification. Emergency mode blocks new JARVIS-controlled actions and speech until explicitly released. Self-modification validates generated source, stages the proposal, and requires a human confirmation on the HUD before changing JARVIS source; approved edits are backed up and undoable. Existing filenames are preserved; these are additional modules and targeted edits.\nWeather no longer opens Google/browser search. weather_report calls Weatherstack directly, detects the public IP when no city is supplied, refreshes the compact weather HUD automatically, and puts richer reports in the existing content panel.
 
 The existing filenames are preserved. New capabilities are implemented as additional `actions/*.py` modules plus targeted edits to `main.py`, `core/prompt.txt`, and `ui.py`.
 
@@ -69,12 +69,12 @@ The existing filenames are preserved. New capabilities are implemented as additi
 | 🗓️ Session Memory | Summarises each conversation and mentions it naturally next morning — consumed after use, never repeats |
 | 👁️‍🗨️ Background Monitoring | User-configured topic watching — checks for new headlines once a day and alerts naturally |
 | 📊 Hardware Monitoring | Continuous CPU, RAM, GPU and temperature telemetry with localized voice alerts |
-| 🌤️ Weather Report | Live weather data for your city, personalized from memory |
+| 🌤️ Weather Report | Weatherstack-powered live weather, automatic public-IP location, compact HUD card, and detailed current/forecast reports when supported |
 | 🗺️ Dynamic Content Panel | Scrollable display layer beneath the HUD that renders web results, news, and search data |
 | 🔍 Multi-Mode Web Search | `news` / `research` / `price` / `compare` / `search` — Gemini Grounded first, DDG fallback |
 | ⏰ Smart Reminders | OS-native scheduled notifications (Windows Task Scheduler / macOS LaunchAgent / Linux systemd) |
 | ⏱️ Stopwatch | Persistent stopwatch with start, pause, resume, stop, laps, status, and reset |
-| ⚙️ Windows Settings Control | Opens Windows Settings pages by voice, searches Settings, controls Wi-Fi/Bluetooth, and changes supported user-level settings |
+| ⚙️ Windows Settings Control | Opens Windows Settings pages by voice, searches Settings, controls Wi-Fi/Bluetooth, and changes supported user-level settings |\n| 🛑 Emergency Kill Switch | Fail-closed local stop for JARVIS-controlled speech and new tool actions, with HUD release control |\n| 🧬 Guarded Self-Modification | Validates proposed JARVIS source edits, waits for human HUD confirmation, keeps a backup, and registers undo |
 | ✈️ Flight Finder | Live flight price and availability lookup |
 | 🎮 Game Updater | Checks and triggers game updates on Steam and Epic Games on demand |
 | 📂 File Processor | Read, summarize, and answer questions about local files |
@@ -315,7 +315,7 @@ python main.py
 | **Python** | 3.11, 3.12 or 3.13 |
 | **Microphone** | Required for voice interaction (and for the "Hey Jarvis" wake word) |
 | **Speakers** | Required for voice replies |
-| **API Key** | Free Gemini API key (entered on first launch → `config/api_keys.json`) |
+| **API Key** | Free Gemini API key (entered on first launch → `config/api_keys.json`) |\n| **Weatherstack API Key** | Add `weatherstack_api_key` to `config/api_keys.json`, or set `WEATHERSTACK_API_KEY` in the environment |
 | **GPU** | **Not required.** The avatar is rendered in software |
 | **Wake word** *(optional)* | One-click download from ⚙ → WAKE WORD (`openwakeword`, a few MB, fully local) |
 
@@ -351,7 +351,7 @@ Mark LIV/
 │   ├── file_controller.py    # File system operations
 │   ├── file_processor.py     # Document reading and summarization
 │   ├── send_message.py       # Messaging integration
-│   ├── weather_report.py     # Live weather data
+│   ├── weather_report.py     # Weatherstack current/forecast + public-IP location + HUD updates\n│   ├── emergency_kill_switch.py # Fail-closed JARVIS emergency stop\n│   ├── self_modification.py  # Human-confirmed JARVIS source editing
 │   ├── flight_finder.py      # Flight search
 │   ├── youtube_video.py      # YouTube playback control
 │   ├── game_updater.py       # Game update management (Steam / Epic)
@@ -371,7 +371,7 @@ Mark LIV/
 │   ├── echo.py               # Tells your voice from the assistant's own echo; self-calibrating
 │   ├── hotkey.py             # Push-to-talk chord — global on Windows, windowed fallback elsewhere
 │   ├── undo.py               # One shared undo stack — actions register how to reverse themselves
-│   ├── confirm.py            # Irreversible-action gate — the token is issued by the UI, not the model
+│   ├── confirm.py            # Irreversible-action gate — the token is issued by the UI, not the model\n│   ├── emergency.py           # Fail-closed emergency stop latch\n│   ├── self_modification.py   # Validated, confirmed self-edit pipeline
 │   ├── audio_devices.py      # Microphone / speaker list — filtered, measured, resolved by name
 │   ├── plugin_loader.py      # Plugin engine — discovery, validation, crash isolation
 │   ├── action_loader.py      # Bundled-action engine — the built-in twin of plugin_loader
@@ -397,7 +397,7 @@ Everything stays on your machine. There is no MARK server, no telemetry and no a
 
 | What | Where | Notes |
 |---|---|---|
-| Gemini API key, plugin credentials | `config/api_keys.json` | **Plaintext.** Anyone with your user account can read it. Treat it like a password file. |
+| Gemini API key, Weatherstack key, plugin credentials | `config/api_keys.json` | **Plaintext.** Anyone with your user account can read it. Treat it like a password file. |
 | Dashboard TLS certificate + private key | `config/certs/` | Generated locally, self-signed, never leaves the machine. |
 | What the assistant remembers about you | `memory/long_term.json` | Delete the file to make it forget everything. |
 
