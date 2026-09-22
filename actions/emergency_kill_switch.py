@@ -18,7 +18,6 @@ def emergency_action(parameters: dict, player=None) -> str:
         return "Emergency stop is active." if emergency.is_active() else "Emergency stop is not active."
 
     if action in {"trigger", "engage", "stop", "kill"}:
-        engaged = emergency.is_active()
         if player and hasattr(player, "on_emergency_kill"):
             try:
                 player.on_emergency_kill(True)
@@ -29,6 +28,8 @@ def emergency_action(parameters: dict, player=None) -> str:
         return "Emergency stop engaged; new JARVIS activity is blocked."
 
     if action in {"release", "clear", "resume", "unlock"}:
+        if not bool(p.get("_local", False)):
+            return "Emergency release is available only from the HUD or a local user command."
         if player and hasattr(player, "on_emergency_kill"):
             try:
                 player.on_emergency_kill(False)
