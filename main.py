@@ -953,9 +953,11 @@ class JarvisLive:
         local = self._queue_local_command(text)
         if local:
             return
+        context = self._active_app_context()
+        payload = f"[ACTIVE APP CONTEXT]\n{context}\n\n[USER COMMAND]\n{text}"
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
-                turns={"role": "user", "parts": [{"text": text}]},
+                turns={"role": "user", "parts": [{"text": payload}]},
                 turn_complete=True
             ),
             self._loop
@@ -1024,7 +1026,7 @@ class JarvisLive:
                 return True
             except Exception:
                 return False
-        m = _re.match(r"^(?:open|launch|start)\\s+(.+)$", raw, _re.IGNORECASE)
+        m = _re.match(r"^(?:open|launch|start)\s+(.+)$", raw, _re.IGNORECASE)
         if m and not any(x in low for x in ("website", "url", "http")):
             app_name = m.group(1).strip()
             if app_name:
@@ -1118,7 +1120,7 @@ class JarvisLive:
         if held:
             # Holding the key is also a way to wake it, so push-to-talk works
             # without having to say the wake word first.
-            if self._wake_enabled and not self._awake:
+            if (self._wake_enabled or self._manual_sleep) and not self._awake:
                 self._awake = True
                 self._last_user_speech = time.monotonic()
         try:
@@ -1225,6 +1227,8 @@ class JarvisLive:
                 has_vision="screen_process" in _names,
                 has_mic=True,
             ),
+            "active_app": self._active_app_context(),
+            "routines": format_routines_for_prompt(load_memory()),
         })
 
         parts = [time_ctx, identity_ctx]
@@ -1373,12 +1377,11 @@ class JarvisLive:
                               + "\n".join(f"{i+1}. {t}" for i, t in enumerate(items))
                               ) if items else "I have not changed anything I can undo yet."
                 else:
-                    count = int(args.get("count", 1) or 1)
-                    result = await loop.run_in_executor(
-                        None,
-                        undo_stack.undo_steps if count > 1 else undo_stack.undo_last,
-                        count,
-                    ) if count > 1 else await loop.run_in_executor(None, undo_stack.undo_last)
+                    count = max(1, min(10, int(args.get("count", 1) or 1)))
+                    if count > 1:
+                        result = await loop.run_in_executor(None, undo_stack.undo_steps, count)
+                    else:
+                        result = await loop.run_in_executor(None, undo_stack.undo_last)
 
             elif name == "screen_process":
                 import time as _t_mod
@@ -1775,7 +1778,7 @@ class JarvisLive:
             return False
 
         import base64 as _b64
-        img_b, mime_t, question, angle = self._pending_vision
+        img_b, mime_t, question, angle, vision_meta = self._pending_vision
         self._pending_vision = None
         b64 = _b64.b64encode(img_b).decode("ascii")
         print(f"[Vision] 📤 {len(img_b):,} bytes (angle={angle}) → main session")
@@ -1862,6 +1865,20 @@ class JarvisLive:
                             if txt:
                                 in_buf.append(txt)
                                 self._last_user_speech = time.monotonic()
+                                # Refresh context before the next turn so JARVIS can interpret
+                                # "this window", "this app", and similar references.
+                                try:
+                                    if self.session:
+                                        asyncio.create_task(
+                                            self.session.send_client_content(
+                                                turns={"role": "user", "parts": [{
+                                                    "text": "[ACTIVE APP CONTEXT]\n" + self._active_app_context()
+                                                }]},
+                                                turn_complete=False,
+                                            )
+                                        )
+                                except Exception:
+                                    pass
 
                         if sc.turn_complete:
                             if self._turn_done_event:
@@ -2372,10 +2389,12 @@ class JarvisLive:
                 if self.session:
                     # A remote command is deliberate control and the phone user
                     # has no desktop WAKE button — so it wakes JARVIS if asleep.
-                    if self._wake_enabled and not self._awake:
+                    if (self._wake_enabled or self._manual_sleep) and not self._awake:
                         self.wake(reason="remote command")
+                    context = self._active_app_context()
+                    payload = f"[ACTIVE APP CONTEXT]\n{context}\n\n[REMOTE COMMAND]\n{text}"
                     await self.session.send_client_content(
-                        turns={"role": "user", "parts": [{"text": text}]},
+                        turns={"role": "user", "parts": [{"text": payload}]},
                         turn_complete=True,
                     )
                     self.ui.write_log(f"[Web]: {text}")
@@ -2466,11 +2485,13 @@ class JarvisLive:
 
                     # Wake word: if enabled, come up ASLEEP (mic gated, silent)
                     # until the user says "Hey Jarvis" or taps wake in the UI.
-                    if self._wake_enabled:
+                    if self._wake_enabled or self._manual_sleep:
                         self._ensure_wake_detector()
                         self._awake = False
                         self.ui.set_state("SLEEPING")
-                        self.ui.write_log("SYS: JARVIS online — sleeping. Say 'Hey Jarvis' to wake me.")
+                        self.ui.write_log(
+                            "SYS: JARVIS online — sleeping. Say 'wake up Jarvis' or 'Hey Jarvis' to wake me."
+                        )
                     else:
                         self._awake = True
                         self.ui.set_state("LISTENING")
