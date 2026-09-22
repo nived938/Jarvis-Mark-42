@@ -1080,7 +1080,15 @@ class JarvisLive:
             m_weather = _re.search(r"\bweather\s+(?:in|at|for)\s+(.+)$", raw, _re.IGNORECASE)
             if m_weather:
                 city = m_weather.group(1).strip()
-            self._run_local_action("weather_report", {"city": city, "report": "current"})
+            report = (
+                "forecast"
+                if any(term in low for term in (
+                    "forecast", "tomorrow", "day after tomorrow",
+                    "next few days", "this week", "weekend"
+                ))
+                else "current"
+            )
+            self._run_local_action("weather_report", {"city": city, "report": report, "days": 5})
             return True
 
         # Local stopwatch controls: no Gemini round trip is needed for timing.
