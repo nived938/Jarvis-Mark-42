@@ -85,16 +85,42 @@ def _compress(img_bytes: bytes, source_format: str = "PNG") -> tuple[bytes, str]
         return img_bytes, f"image/{source_format.lower()}"
 
 
-def _capture_screen() -> tuple[bytes, str]:
-
+def _capture_screen(monitor: int = 1, region: dict | None = None) -> tuple[bytes, str]:
+    """Capture a selected monitor, optionally cropped to a local rectangle."""
     if not _MSS:
         raise RuntimeError("mss is not installed. Run: pip install mss")
 
     with mss.mss() as sct:
-        monitors = sct.monitors          # [0] = all combined, [1..n] = real screens
-        target   = monitors[1] if len(monitors) > 1 else monitors[0]
-        shot     = sct.grab(target)
-        png      = mss.tools.to_png(shot.rgb, shot.size)
+        monitors = sct.monitors
+        try:
+            monitor_index = int(monitor)
+        except (TypeError, ValueError):
+            monitor_index = 1
+        if monitor_index < 0 or monitor_index >= len(monitors):
+            monitor_index = 1 if len(monitors) > 1 else 0
+        target = dict(monitors[monitor_index])
+
+        if isinstance(region, dict):
+            try:
+                x = max(0, int(region.get("x", 0)))
+                y = max(0, int(region.get("y", 0)))
+                w = max(1, int(region.get("width", 1)))
+                h = max(1, int(region.get("height", 1)))
+                x = min(x, max(0, target["width"] - 1))
+                y = min(y, max(0, target["height"] - 1))
+                w = min(w, max(1, target["width"] - x))
+                h = min(h, max(1, target["height"] - y))
+                target = {
+                    "left": target["left"] + x,
+                    "top": target["top"] + y,
+                    "width": w,
+                    "height": h,
+                }
+            except Exception:
+                pass
+
+        shot = sct.grab(target)
+        png = mss.tools.to_png(shot.rgb, shot.size)
 
     return _compress(png, "PNG")
 
@@ -181,3 +207,65 @@ def _capture_camera() -> tuple[bytes, str]:
 
     _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, _JPEG_Q])
     return buf.tobytes(), "image/jpeg"
+
+
+def scan_visual_codes(img_bytes: bytes) -> list[dict]:
+    """Decode QR codes and supported barcodes from a captured image."""
+    if not _CV2:
+        raise RuntimeError("OpenCV is not installed.")
+
+    arr = np.frombuffer(img_bytes, dtype=np.uint8)
+    image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if image is None:
+        raise RuntimeError("Could not decode the captured image.")
+
+    found: list[dict] = []
+
+    try:
+        detector = cv2.QRCodeDetector()
+        multi = detector.detectAndDecodeMulti(image)
+        if isinstance(multi, tuple) and len(multi) >= 3:
+            ok, decoded_info = multi[0], multi[1]
+            if ok and decoded_info:
+                for value in decoded_info:
+                    value = str(value or "").strip()
+                    if value:
+                        found.append({"type": "QR", "data": value})
+        else:
+            value, _points, _ = detector.detectAndDecode(image)
+            value = str(value or "").strip()
+            if value:
+                found.append({"type": "QR", "data": value})
+    except Exception:
+        pass
+
+    barcode_cls = getattr(cv2, "barcode_BarcodeDetector", None)
+    if barcode_cls:
+        try:
+            detector = barcode_cls()
+            decoded = detector.detectAndDecode(image)
+            if isinstance(decoded, tuple):
+                values = decoded[0] if len(decoded) > 0 else []
+                types_found = decoded[1] if len(decoded) > 1 else []
+            else:
+                values, types_found = [], []
+            if isinstance(values, str):
+                values = [values]
+            if isinstance(types_found, str):
+                types_found = [types_found]
+            for i, value in enumerate(values or []):
+                value = str(value or "").strip()
+                if value:
+                    kind = str(types_found[i] if i < len(types_found) else "BARCODE")
+                    found.append({"type": kind or "BARCODE", "data": value})
+        except Exception:
+            pass
+
+    unique = []
+    seen = set()
+    for item in found:
+        key = (item.get("type", ""), item.get("data", ""))
+        if key not in seen:
+            seen.add(key)
+            unique.append(item)
+    return unique
