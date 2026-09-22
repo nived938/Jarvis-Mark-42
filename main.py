@@ -1064,7 +1064,7 @@ class JarvisLive:
             "release emergency stop", "clear emergency stop",
             "unlock jarvis", "resume jarvis"
         )):
-            self._run_local_action("emergency_kill_switch", {"action": "release"})
+            self._run_local_action("emergency_kill_switch", {"action": "release", "_local": True})
             return True
 
         # Weather is a direct local API action — never route weather requests
