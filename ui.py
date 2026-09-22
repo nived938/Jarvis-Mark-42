@@ -2921,6 +2921,7 @@ class MainWindow(QMainWindow):
     _state_sig      = pyqtSignal(str)
     _content_sig    = pyqtSignal(str, str)   # (title, text) — thread-safe content display
     _weather_sig     = pyqtSignal(object)     # compact live weather payload
+    _emergency_sig    = pyqtSignal(bool)        # emergency latch → Qt thread
     _reconfig_sig   = pyqtSignal()           # trigger setup overlay from any thread
     _camera_sig     = pyqtSignal(bytes)      # show camera frame preview (small overlay)
     _cam_stream_sig = pyqtSignal(bool)       # True=start live stream, False=stop
@@ -3084,6 +3085,7 @@ class MainWindow(QMainWindow):
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
         self._weather_sig.connect(self._show_weather)
+        self._emergency_sig.connect(self.set_emergency_active)
         self._reconfig_sig.connect(self._show_setup)
         self._camera_sig.connect(self._show_camera_frame)
         self._confirm_sig.connect(self._show_confirm_banner)
@@ -5511,7 +5513,7 @@ class JarvisUI:
     def set_emergency_active(self, active: bool) -> None:
         """Thread-safe: reflect the emergency-stop latch in the HUD."""
         try:
-            self._win.set_emergency_active(bool(active))
+            self._win._emergency_sig.emit(bool(active))
         except Exception:
             pass
 
