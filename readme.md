@@ -26,6 +26,7 @@ It's not just an assistant — it's an extension of your digital life.
 Mark 43 expands the existing architecture without renaming the original modules. It adds targeted visual/OCR capture, active-app context, personal routines, local network diagnostics, QR/barcode scanning, stronger memory relevance and forgetting controls, multi-step undo, safer file previews, browser tab/page tools, code-edit validation and repair, plus a JARVIS process manager for sleep, wake, restart and shutdown.
 
 This feature expansion also adds speaker identity profiles, a personal activity timeline, goal/OKR tracking, a workflow recorder, a local notification inbox, JARVIS Focus Mode, clipboard history, a read-only JARVIS Doctor, per-application Windows audio control, software update management, connected-device inventory, and an idle-time file path index for fast file discovery/opening.
+It also adds a persistent stopwatch and a Windows Settings controller with broad Settings-page navigation, Wi-Fi/Bluetooth controls, and supported direct user-level settings changes. Existing filenames are preserved; these are additional action modules and targeted edits.
 
 The existing filenames are preserved. New capabilities are implemented as additional `actions/*.py` modules plus targeted edits to `main.py`, `core/prompt.txt`, and `ui.py`.
 
