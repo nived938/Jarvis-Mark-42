@@ -483,6 +483,10 @@ TOOL_DECLARATIONS = [
             "properties": {
                 "angle": {"type": "STRING", "description": "screen or camera"},
                 "monitor": {"type": "INTEGER", "description": "Monitor index, 1-based. 1 is the first physical monitor."},
+                "x": {"type": "INTEGER", "description": "Optional region X offset on the selected monitor."},
+                "y": {"type": "INTEGER", "description": "Optional region Y offset on the selected monitor."},
+                "width": {"type": "INTEGER", "description": "Optional region width."},
+                "height": {"type": "INTEGER", "description": "Optional region height."},
             },
             "required": []
         }
@@ -1334,7 +1338,15 @@ class JarvisLive:
             key      = args.get("key", "")
             value    = args.get("value", "")
             if key and value:
-                update_memory({category: {key: {"value": value}}})
+                try:
+                    importance = max(1, min(5, int(args.get("importance", 1))))
+                except (TypeError, ValueError):
+                    importance = 1
+                update_memory({category: {key: {
+                    "value": value,
+                    "importance": importance,
+                    "pinned": bool(args.get("pinned", False)),
+                }}})
                 print(f"[Memory] 💾 save_memory: {category}/{key} = {value}")
             if not self.ui.muted:
                 self.ui.set_state("LISTENING")
@@ -1361,7 +1373,12 @@ class JarvisLive:
                               + "\n".join(f"{i+1}. {t}" for i, t in enumerate(items))
                               ) if items else "I have not changed anything I can undo yet."
                 else:
-                    result = await loop.run_in_executor(None, undo_stack.undo_last)
+                    count = int(args.get("count", 1) or 1)
+                    result = await loop.run_in_executor(
+                        None,
+                        undo_stack.undo_steps if count > 1 else undo_stack.undo_last,
+                        count,
+                    ) if count > 1 else await loop.run_in_executor(None, undo_stack.undo_last)
 
             elif name == "screen_process":
                 import time as _t_mod
@@ -1376,17 +1393,33 @@ class JarvisLive:
                     self._vision_last_time = _now
                     angle     = args.get("angle", "screen").lower()
                     user_text = args.get("text", "What do you see?")
+                    monitor   = args.get("monitor", 1)
+                    region = None
+                    if any(k in args for k in ("x", "y", "width", "height")):
+                        region = {
+                            "x": args.get("x", 0),
+                            "y": args.get("y", 0),
+                            "width": args.get("width", 1),
+                            "height": args.get("height", 1),
+                        }
                     if angle == "camera":
                         img_b, mime_t = await loop.run_in_executor(None, _capture_camera)
                         self.ui.start_camera_stream()
                         self._vision_cam_active = True
                         print(f"[Vision] 📷 Camera: {len(img_b):,} bytes")
                         _stall = "camera"
+                        vision_meta = "webcam"
                     else:
-                        img_b, mime_t = await loop.run_in_executor(None, _capture_screen)
-                        print(f"[Vision] 🖥️  Screen: {len(img_b):,} bytes")
+                        img_b, mime_t = await loop.run_in_executor(
+                            None, lambda: _capture_screen(monitor=monitor, region=region)
+                        )
+                        print(f"[Vision] 🖥️  Screen monitor {monitor}: {len(img_b):,} bytes")
                         _stall = "screen"
-                    self._pending_vision = (img_b, mime_t, user_text, angle)
+                        vision_meta = f"screen monitor {monitor}" + (
+                            f", region {region['x']},{region['y']} {region['width']}x{region['height']}"
+                            if region else ""
+                        )
+                    self._pending_vision = (img_b, mime_t, user_text, angle, vision_meta)
                     # The image is attached to this same exchange, so there is
                     # nothing to stall for and nothing to announce. Asking for an
                     # acknowledgement here is what produced two spoken answers —
@@ -1398,6 +1431,109 @@ class JarvisLive:
                         f"is arriving with this result. Reply once, from what you actually see "
                         f"in it."
                     )
+
+            elif name == "screen_ocr":
+                angle = str(args.get("angle", "screen") or "screen").lower()
+                if angle not in ("screen", "camera"):
+                    angle = "screen"
+                monitor = args.get("monitor", 1)
+                ocr_question = (
+                    "OCR MODE. Extract all readable text from this image exactly as displayed. "
+                    "Preserve meaningful line breaks and punctuation. Return only the extracted text. "
+                    "If no readable text is present, return NO_READABLE_TEXT."
+                )
+                if angle == "camera":
+                    img_b, mime_t = await loop.run_in_executor(None, _capture_camera)
+                    self.ui.start_camera_stream()
+                    self._vision_cam_active = True
+                    vision_meta = "webcam OCR"
+                else:
+                    img_b, mime_t = await loop.run_in_executor(
+                        None, lambda: _capture_screen(monitor=monitor)
+                    )
+                    vision_meta = f"screen monitor {monitor} OCR"
+                self._pending_vision = (img_b, mime_t, ocr_question, angle, vision_meta)
+                result = "[VISION_ACTIVE] OCR image attached. Extract the text and return only the OCR result."
+
+            elif name == "scan_visual_code":
+                angle = str(args.get("angle", "screen") or "screen").lower()
+                monitor = args.get("monitor", 1)
+                if angle == "camera":
+                    img_b, mime_t = await loop.run_in_executor(None, _capture_camera)
+                    self.ui.show_camera_frame(img_b)
+                    source = "camera"
+                else:
+                    img_b, mime_t = await loop.run_in_executor(
+                        None, lambda: _capture_screen(monitor=monitor)
+                    )
+                    source = f"screen monitor {monitor}"
+                codes = await loop.run_in_executor(None, lambda: scan_visual_codes(img_b))
+                if codes:
+                    result = f"Codes found in {source}:\n" + "\n".join(
+                        f"- {item.get('type', 'CODE')}: {item.get('data', '')}" for item in codes
+                    )
+                    self.ui.show_content("SCANNED CODES", result)
+                else:
+                    result = f"No QR code or supported barcode detected in {source}."
+
+            elif name == "network_diagnostics":
+                host = str(args.get("host", "1.1.1.1") or "1.1.1.1")
+                result = await loop.run_in_executor(None, lambda: get_network_diagnostics(host))
+
+            elif name == "active_app":
+                result = self._active_app_context()
+
+            elif name == "forget_memory":
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: forget_memory(
+                        query=str(args.get("query", "")),
+                        category=str(args.get("category", "")),
+                        key=str(args.get("key", "")),
+                    )
+                )
+
+            elif name == "manage_routine":
+                action = str(args.get("action", "list") or "list").lower().strip()
+                routine_name = str(args.get("name", "") or "").strip()
+                if action == "create":
+                    result = save_routine(
+                        routine_name,
+                        args.get("steps", ""),
+                        str(args.get("description", "") or ""),
+                    )
+                elif action == "delete":
+                    result = delete_routine(routine_name)
+                elif action == "list":
+                    result = list_routines()
+                elif action == "get":
+                    routine = get_routine(routine_name)
+                    if not routine:
+                        result = f"Routine not found: {routine_name}"
+                    else:
+                        result = "Routine: " + str(routine.get("name", routine_name)) + "\nSteps:\n" + "\n".join(
+                            f"{i + 1}. {s}" for i, s in enumerate(routine.get("steps", []))
+                        )
+                elif action == "run":
+                    routine = get_routine(routine_name)
+                    if not routine:
+                        result = f"Routine not found: {routine_name}"
+                    else:
+                        result = (
+                            f"[ROUTINE_RUN] Execute this routine in order without skipping steps: "
+                            f"{routine.get('name', routine_name)}\n" +
+                            "\n".join(f"{i + 1}. {s}" for i, s in enumerate(routine.get("steps", [])))
+                        )
+                else:
+                    result = "Routine action must be create, delete, list, get, or run."
+
+            elif name == "sleep_jarvis":
+                self.sleep(reason="user requested sleep", manual=True)
+                result = "JARVIS is sleeping. Say 'wake up Jarvis' or 'Hey Jarvis' to wake me."
+
+            elif name == "restart_jarvis":
+                asyncio.create_task(self._lifecycle_action("restart"))
+                result = "JARVIS is restarting."
 
             elif name == "close_camera":
                 self.ui.stop_camera_stream()
