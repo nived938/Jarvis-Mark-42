@@ -85,7 +85,7 @@ def _compress(img_bytes: bytes, source_format: str = "PNG") -> tuple[bytes, str]
         return img_bytes, f"image/{source_format.lower()}"
 
 
-def _capture_screen(monitor: int = 1, region: dict | None = None) -> tuple[bytes, str]:
+def _capture_screen(monitor: int = 1, region: dict | None = None, zoom: float = 1.0) -> tuple[bytes, str]:
     """Capture a selected monitor, optionally cropped to a local rectangle."""
     if not _MSS:
         raise RuntimeError("mss is not installed. Run: pip install mss")
@@ -121,6 +121,26 @@ def _capture_screen(monitor: int = 1, region: dict | None = None) -> tuple[bytes
 
         shot = sct.grab(target)
         png = mss.tools.to_png(shot.rgb, shot.size)
+
+    # Optional zoom is applied after cropping so a small region remains legible.
+    # Keep it bounded to prevent accidental memory explosions.
+    try:
+        zoom = max(1.0, min(4.0, float(zoom)))
+    except (TypeError, ValueError):
+        zoom = 1.0
+    if zoom > 1.0 and _PIL:
+        try:
+            image = PIL.Image.open(io.BytesIO(png)).convert("RGB")
+            w, h = image.size
+            image = image.resize(
+                (max(1, int(w * zoom)), max(1, int(h * zoom))),
+                PIL.Image.Resampling.LANCZOS,
+            )
+            out = io.BytesIO()
+            image.save(out, format="PNG")
+            png = out.getvalue()
+        except Exception as e:
+            print(f"[Vision] Zoom failed: {e}")
 
     return _compress(png, "PNG")
 
