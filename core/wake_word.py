@@ -21,6 +21,8 @@ import queue
 import subprocess
 import sys
 import threading
+import re
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -127,7 +129,10 @@ class WakeWordDetector:
         self._thread: threading.Thread | None = None
         self._running = False
         self._model = None
+        self._phrase_stt = None
         self._ready = False
+        self._phrase_stt = None
+        self._last_phrase_wake = 0.0
 
     def start(self) -> bool:
         """Load the model and spawn the inference thread. Returns True on success.
@@ -142,6 +147,17 @@ class WakeWordDetector:
             self._notify("Wake word unavailable — use the WAKE NOW button.")
             self._model = None
             return False
+        # Optional phrase recognizer for manual sleep: "wake up Jarvis".
+        # The normal Hey Jarvis detector remains the primary path and still works
+        # when this secondary recognizer cannot be loaded.
+        try:
+            from core.stt import VoskSTT
+            self._phrase_stt = VoskSTT(language="en-us")
+            self._logger("Wake word: also listening for 'wake up Jarvis'.")
+        except Exception as e:
+            self._phrase_stt = None
+            self._logger(f"Wake word: phrase recognizer unavailable ({e}); Hey Jarvis remains available.")
+
         self._running = True
         self._ready = True
         self._thread = threading.Thread(target=self._loop, daemon=True, name="WakeWordThread")
@@ -193,8 +209,24 @@ class WakeWordDetector:
                             score = max(score, float(v))
                     if score == 0.0 and scores:
                         score = max(float(v) for v in scores.values())
-                if score >= self._threshold:
-                    # drain any backlog so we don't double-fire on the same utterance
+                phrase_hit = False
+                if self._phrase_stt is not None:
+                    try:
+                        _text, _final = self._phrase_stt.process_chunk(
+                            np.asarray(frame, dtype=np.int16).tobytes()
+                        )
+                        norm = re.sub(r"[^a-z0-9]+", " ", (_text or "").lower()).strip()
+                        phrase_hit = bool(_final and (
+                            "wake up jarvis" in norm or "wake jarvis" in norm
+                        ))
+                    except Exception:
+                        phrase_hit = False
+
+                if score >= self._threshold or phrase_hit:
+                    now = time.monotonic()
+                    if now - self._last_phrase_wake < 2.0:
+                        continue
+                    self._last_phrase_wake = now
                     self._drain()
                     try:
                         self._on_detect()
