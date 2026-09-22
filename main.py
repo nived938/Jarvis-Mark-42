@@ -1804,10 +1804,12 @@ class JarvisLive:
         # label *means* is explained once, in the generated [SELF] block.
         src = ("[IMAGE SOURCE: WEBCAM]" if angle == "camera"
                else "[IMAGE SOURCE: SCREEN CAPTURE]")
+        meta = str(vision_meta or "").strip()
+        source_text = src + (f"\n[{meta}]" if meta else "")
         await self.session.send_client_content(
             turns={"role": "user", "parts": [
                 {"inline_data": {"mime_type": mime_t, "data": b64}},
-                {"text": f"{src}\n\n{question}"},
+                {"text": f"{source_text}\n\n{question}"},
             ]},
             turn_complete=True,
         )
