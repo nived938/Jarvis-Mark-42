@@ -156,17 +156,23 @@ def _recursive_update(target: dict, updates: dict) -> bool:
             if _recursive_update(target[key], value):
                 changed = True
         else:
+            existing = target.get(key, {})
+            if not isinstance(existing, dict):
+                existing = {}
             if isinstance(value, dict):
                 raw_value = value.get("value", "")
                 try:
-                    importance = max(1, min(MAX_MEMORY_IMPORTANCE, int(value.get("importance", 1))))
+                    importance = max(1, min(MAX_MEMORY_IMPORTANCE, int(value.get("importance", existing.get("importance", 1)))))
                 except (TypeError, ValueError):
                     importance = 1
-                pinned = bool(value.get("pinned", False))
+                pinned = bool(value.get("pinned", existing.get("pinned", False)))
             else:
                 raw_value = value
-                importance = 1
-                pinned = False
+                try:
+                    importance = max(1, min(MAX_MEMORY_IMPORTANCE, int(existing.get("importance", 1))))
+                except (TypeError, ValueError):
+                    importance = 1
+                pinned = bool(existing.get("pinned", False))
             if raw_value is None or not str(raw_value).strip():
                 continue
             new_val = _truncate_value(str(raw_value))
@@ -177,10 +183,8 @@ def _recursive_update(target: dict, updates: dict) -> bool:
             }
             if pinned:
                 entry["pinned"] = True
-            existing = target.get(key, {})
             if (
-                not isinstance(existing, dict)
-                or existing.get("value") != new_val
+                existing.get("value") != new_val
                 or int(existing.get("importance", 1) or 1) != importance
                 or bool(existing.get("pinned", False)) != pinned
             ):
