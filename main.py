@@ -1063,29 +1063,22 @@ class JarvisLive:
             return str(e)
 
     async def _lifecycle_action(self, action: str) -> None:
+        """Perform a JARVIS process lifecycle action without involving Gemini."""
         self.ui.write_log(f"SYS: {action.title()} requested.")
-        # A restart/shutdown requested while offline must not wait on an LLM
-        # session summary. Summaries are only attempted for a live session.
+
+        # Save the current session only when one exists. Do not send another
+        # user turn through Gemini here because that can cause the model to
+        # call restart_jarvis/shutdown_jarvis again and create a lifecycle loop.
         if self.session:
             await self._save_session_summary()
-            try:
-                lifecycle_phrase = {
-                    "restart": "restarting",
-                    "shutdown": "shutting down",
-                }.get(action, action)
-                await self.session.send_client_content(
-                    turns={"role": "user", "parts": [{
-                        "text": f"Give the user one brief sentence confirming that JARVIS is {lifecycle_phrase}."
-                    }]},
-                    turn_complete=True,
-                )
-            except Exception:
-                pass
+
         if action == "restart":
+            self.ui.write_log("SYS: Restarting JARVIS.")
             await asyncio.sleep(0.8)
             if not self._manager.restart():
                 self.ui.write_log("ERR: JARVIS restart failed.")
         elif action == "shutdown":
+            self.ui.write_log("SYS: Shutting down JARVIS.")
             await asyncio.sleep(0.8)
             self._manager.shutdown()
 
