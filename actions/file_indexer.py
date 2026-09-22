@@ -20,12 +20,17 @@ SKIP_NAMES={".git","node_modules","__pycache__",".venv","venv","env","AppData","
 
 def _load():
     try:
-        d=json.loads(STORE.read_text(encoding="utf-8")); return d if isinstance(d,dict) else {"files":{}}
-    except Exception:return {"files":{}}
+        d=json.loads(STORE.read_text(encoding="utf-8"))
+        return d if isinstance(d,dict) else {"files":{}}
+    except Exception:
+        return {"files":{}}
+
 def _save(d):
     STORE.parent.mkdir(parents=True,exist_ok=True)
     d["files"]=dict(list(d.get("files",{}).items())[-MAX_ENTRIES:])
-    tmp=STORE.with_suffix(".tmp"); tmp.write_text(json.dumps(d,indent=2,ensure_ascii=False),encoding="utf-8"); tmp.replace(STORE)
+    tmp=STORE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(d,indent=2,ensure_ascii=False),encoding="utf-8")
+    tmp.replace(STORE)
 
 def _idle_time():
     sys=platform.system()
@@ -33,66 +38,110 @@ def _idle_time():
         class LASTINPUTINFO(ctypes.Structure):
             _fields_=[("cbSize",ctypes.c_uint),("dwTime",ctypes.c_uint)]
         try:
-            li=LASTINPUTINFO(); li.cbSize=ctypes.sizeof(LASTINPUTINFO); ctypes.windll.user32.GetLastInputInfo(ctypes.byref(li))
+            li=LASTINPUTINFO(); li.cbSize=ctypes.sizeof(LASTINPUTINFO)
+            ctypes.windll.user32.GetLastInputInfo(ctypes.byref(li))
             now=ctypes.windll.kernel32.GetTickCount()
-            return (now-li.dwTime)/1000.0
-        except Exception:return 0.0
+            return max(0.0,(now-li.dwTime)/1000.0)
+        except Exception:
+            return 0.0
     if sys=="Linux":
         try:
-            out=subprocess.check_output(["xprintidle"],stderr=subprocess.DEVNULL,timeout=2); return float(out)/1000.0
-        except Exception:return 0.0
+            out=subprocess.check_output(["xprintidle"],stderr=subprocess.DEVNULL,timeout=2)
+            return float(out)/1000.0
+        except Exception:
+            return 0.0
     return 0.0
 
 def _roots():
-    roots=[]
-    home=Path.home()
-    for name in ("Desktop","Documents","Downloads","Pictures","Videos","Music"):
-        p=home/name
-        if p.exists(): roots.append(p)
-    # Include projects/data saved on other fixed Windows drives too, while
-    # skipping the OS/system trees. This is what makes E:\ projects discoverable.
+    roots=[Path.home()]
     if platform.system()=="Windows":
         for drive in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-            root=Path(f"{drive}:\\")
+            root=Path(f"{drive}:\\\\")
             try:
-                if root.exists() and root != Path("C:\\"):
+                if root.exists() and str(root).casefold()!="c:\\\\":
                     roots.append(root)
-            except Exception:pass
-    if not roots:roots=[home]
+            except Exception:
+                pass
     return roots
 
+def _skip_dir(name:str)->bool:
+    low=name.casefold()
+    skip={x.casefold() for x in SKIP_NAMES}
+    return low in skip or low.startswith("$")
+
 def _scan():
-    with LOCK:d=_load(); files=d.setdefault("files",{})
-    count=0; seen=set()
-    for root in _roots():
-        root_str=str(root)
-        for base,dirs,names in os.walk(root,topdown=True):
-            dirs[:]=[x for x in dirs if x not in SKIP_NAMES and not x.startswith("$")]
-            for fn in names:
-                if count>=BATCH_LIMIT:return
-                try:
-                    p=Path(base)/fn
-                    if p.is_symlink():continue
-                    st=p.stat()
-                    key=str(p.resolve())
-                    seen.add(key)
-                    old=files.get(key)
-                    sig=(int(st.st_mtime_ns),int(st.st_size))
-                    if not old or (old.get("mtime"),old.get("size"))!=sig:
-                        files[key]={"name":p.name,"path":key,"ext":p.suffix.lower(),"size":int(st.st_size),"mtime":int(st.st_mtime_ns)}
-                    count+=1
-                except (OSError,PermissionError):continue
-    d["last_scan"]=time.strftime("%Y-%m-%dT%H:%M:%S"); d["indexed_this_pass"]=count
-    with LOCK:_save(d)
+    with LOCK:
+        d=_load()
+    queue=list(d.get("pending_dirs",[]))
+    if not queue and not d.get("index_initialized"):
+        queue=[str(p) for p in _roots()]
+        d["index_initialized"]=True
+
+    files=d.setdefault("files",{})
+    count=0
+    dirs_done=0
+    interrupted=False
+
+    while queue and count<BATCH_LIMIT:
+        if dirs_done and _idle_time()<IDLE_SECONDS:
+            interrupted=True
+            break
+        base=Path(queue.pop(0))
+        try:
+            with os.scandir(base) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if not _skip_dir(entry.name):
+                                queue.append(entry.path)
+                            continue
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                        p=Path(entry.path)
+                        st=entry.stat(follow_symlinks=False)
+                        key=str(p.resolve())
+                        sig=(int(st.st_mtime_ns),int(st.st_size))
+                        old=files.get(key)
+                        if not old or (old.get("mtime"),old.get("size"))!=sig:
+                            files[key]={
+                                "name":p.name,
+                                "path":key,
+                                "ext":p.suffix.lower(),
+                                "size":int(st.st_size),
+                                "mtime":int(st.st_mtime_ns),
+                            }
+                        count+=1
+                        if count>=BATCH_LIMIT:
+                            break
+                    except (OSError,PermissionError):
+                        continue
+        except (OSError,PermissionError):
+            pass
+        dirs_done+=1
+        if dirs_done%100==0 and _idle_time()<IDLE_SECONDS:
+            interrupted=True
+            break
+
+    d["pending_dirs"]=queue
+    d["last_scan"]=time.strftime("%Y-%m-%dT%H:%M:%S")
+    d["indexed_this_pass"]=count
+    d["scan_complete"]=not bool(queue)
+    d["scan_interrupted"]=interrupted
+    with LOCK:
+        _save(d)
 
 def _background():
     last=0
     while not STOP.wait(20):
-        if time.time()-last<RESCAN_INTERVAL:continue
-        if _idle_time()<IDLE_SECONDS:continue
+        if time.time()-last<RESCAN_INTERVAL:
+            continue
+        if _idle_time()<IDLE_SECONDS:
+            continue
         try:
-            _scan(); last=time.time()
-        except Exception:pass
+            _scan()
+            last=time.time()
+        except Exception:
+            pass
 
 threading.Thread(target=_background,name="JarvisIdleFileIndexer",daemon=True).start()
 
