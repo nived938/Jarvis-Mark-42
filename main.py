@@ -52,7 +52,9 @@ from ui import JarvisUI
 from memory.memory_manager import (
     load_memory, update_memory, format_memory_for_prompt,
     save_session_summary, pop_last_session,
-    search_memory, set_trim_notifier,
+    search_memory, forget_memory,
+    save_routine, delete_routine, list_routines, get_routine,
+    format_routines_for_prompt, set_trim_notifier,
 )
 
 # The file-backed tools (open_app, web_search, browser_control, …) are no longer
@@ -61,8 +63,10 @@ from memory.memory_manager import (
 # Only tools that are tied to live-session state stay inline in this file
 # (screen_process, close_camera, save_memory, manage_monitor, shutdown_jarvis,
 # system_status).
-from actions.screen_processor  import _capture_camera, _capture_screen
-from actions.system_monitor    import SystemMonitor, get_system_status
+from actions.screen_processor  import (
+    _capture_camera, _capture_screen, scan_visual_codes
+)
+from actions.system_monitor    import SystemMonitor, get_system_status, get_network_diagnostics
 from actions.proactive         import ProactiveEngine
 from actions.background_monitor import (
     add_monitor, remove_monitor, list_monitors, check_all as monitor_check_all,
@@ -80,6 +84,7 @@ from core                      import audio_devices
 from core.action_loader        import discover_actions
 from core.echo                 import EchoGuard
 from core.viseme               import VisemeStream
+from Jarvis_Manager            import JarvisManager
 from core.wake_word            import (
     WakeWordDetector, is_ready as wake_is_ready, install_and_download as wake_install,
 )
@@ -636,6 +641,8 @@ class JarvisLive:
         self._awake            = not self._wake_enabled
         self._wake_detector: WakeWordDetector | None = None
         self._wake_sleep_timeout = WAKE_SLEEP_TIMEOUT
+        self._manual_sleep       = False
+        self._manager            = JarvisManager(logger=lambda m: self.ui.write_log(m))
 
         # Restore the saved push-to-talk preference. Doing it here rather than
         # in __init__ means the hotkey thread only exists once there is a
@@ -655,10 +662,13 @@ class JarvisLive:
     # ── Wake word: state machine ─────────────────────────────────────────────
 
     def _wake_state(self) -> dict:
-        # A loaded, running detector is definitively ready; otherwise fall back
-        # to the cheap on-disk model-file check (no Model construction).
         ready = bool(self._wake_detector and self._wake_detector.ready) or wake_is_ready()
-        return {"enabled": self._wake_enabled, "awake": self._awake, "ready": ready}
+        return {
+            "enabled": self._wake_enabled,
+            "awake": self._awake,
+            "ready": ready,
+            "manual_sleep": self._manual_sleep,
+        }
 
     def _ensure_wake_detector(self) -> bool:
         """Load the detector once (model loads on first start). Idempotent."""
@@ -673,25 +683,38 @@ class JarvisLive:
         return True
 
     def _on_wake_detected(self) -> None:
-        """Called from the detector thread when 'Hey Jarvis' is heard."""
-        self.wake(reason="wake word")
+        """Called from the local wake detector thread."""
+        self.wake(reason="wake phrase")
 
-    def wake(self, reason: str = "wake word") -> None:
+    def wake(self, reason: str = "wake phrase") -> None:
+        self._manual_sleep = False
         if self._awake:
             return
         self._awake = True
-        self._last_user_speech = time.monotonic()   # start the auto-sleep clock now
+        self._last_user_speech = time.monotonic()
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
         self.ui.write_log(f"SYS: Awake — {reason}.")
 
-    def sleep(self, reason: str = "timeout") -> None:
+    def sleep(self, reason: str = "timeout", manual: bool = False) -> None:
         if not self._awake:
+            if manual:
+                self._manual_sleep = True
             return
         self._awake = False
+        self._manual_sleep = bool(manual)
         self.set_speaking(False)
         self.ui.set_state("SLEEPING")
-        self.ui.write_log(f"SYS: Sleeping — {reason}. Say 'Hey Jarvis' to wake me.")
+        self.ui.write_log(
+            "SYS: Sleeping — "
+            + str(reason)
+            + ". Say 'wake up Jarvis' or 'Hey Jarvis' to wake me."
+        )
+        if manual:
+            try:
+                self._ensure_wake_detector()
+            except Exception as e:
+                self.ui.write_log(f"SYS: Local wake detector unavailable: {e}")
 
     async def _run_sleep_watch(self) -> None:
         """Auto-sleep after the configured silence window (wake-word mode only)."""
@@ -727,10 +750,8 @@ class JarvisLive:
 
     def _ui_wake_manual(self) -> None:
         """Manual sleep/wake button in the UI."""
-        if not self._wake_enabled:
-            return
         if self._awake:
-            self.sleep(reason="you tapped sleep")
+            self.sleep(reason="you tapped sleep", manual=True)
         else:
             self.wake(reason="you tapped wake")
 
@@ -834,8 +855,11 @@ class JarvisLive:
         # Respect wake-word sleep: a typed command must not be answered while
         # asleep either (the sleep gate is not just for the mic). Wake first with
         # "Hey Jarvis" or the WAKE NOW button.
-        if self._wake_enabled and not self._awake:
-            self.ui.write_log("SYS: I'm asleep — say 'Hey Jarvis' or tap WAKE NOW first.")
+        if (self._wake_enabled or self._manual_sleep) and not self._awake:
+            self.ui.write_log("SYS: I'm asleep — say 'wake up Jarvis' or tap WAKE NOW first.")
+            return
+        local = self._queue_local_command(text)
+        if local:
             return
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
@@ -844,6 +868,105 @@ class JarvisLive:
             ),
             self._loop
         )
+
+    def _active_app_context(self) -> str:
+        """Return the foreground application/window without an LLM call."""
+        try:
+            import platform as _plat
+            if _plat.system() == "Windows":
+                import ctypes
+                import psutil
+                hwnd = ctypes.windll.user32.GetForegroundWindow()
+                if not hwnd:
+                    return "Unknown active application."
+                length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+                buf = ctypes.create_unicode_buffer(max(1, length + 1))
+                ctypes.windll.user32.GetWindowTextW(hwnd, buf, len(buf))
+                title = buf.value.strip()
+                pid = ctypes.c_ulong()
+                ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                try:
+                    proc = psutil.Process(pid.value)
+                    name = proc.name()
+                except Exception:
+                    name = "unknown"
+                return f"Application: {name}\nWindow: {title or '(untitled)'}"
+            if _plat.system() == "Darwin":
+                r = _subprocess.run(
+                    ["osascript", "-e", 'tell application "System Events" to get {name of first application process whose frontmost is true, name of window 1 of first application process whose frontmost is true}'],
+                    capture_output=True, text=True, timeout=2,
+                )
+                return "Active application/window: " + r.stdout.strip() if r.stdout.strip() else "Unknown active application."
+            # Linux: xdotool is optional. Do not fail if a desktop does not provide it.
+            r = _subprocess.run(["xdotool", "getactivewindow", "getwindowname"], capture_output=True, text=True, timeout=2)
+            title = r.stdout.strip()
+            return f"Active window: {title}" if title else "Unknown active application."
+        except Exception:
+            return "Active application context unavailable."
+
+    def _queue_local_command(self, text: str) -> bool:
+        """Handle simple computer commands without Gemini. Returns True when consumed."""
+        import re as _re
+        raw = str(text or "").strip()
+        low = raw.casefold()
+        if not raw:
+            return False
+        if any(k in low for k in ("wake up jarvis", "wake jarvis")):
+            self.wake(reason="local command")
+            return True
+        if any(k in low for k in ("sleep jarvis", "put jarvis to sleep", "make jarvis sleep")):
+            self.sleep(reason="local command", manual=True)
+            return True
+        if any(k in low for k in ("restart jarvis", "reboot jarvis")):
+            asyncio.run_coroutine_threadsafe(self._lifecycle_action("restart"), self._loop)
+            return True
+        if any(k in low for k in ("shutdown jarvis", "close jarvis", "exit jarvis", "stop jarvis")):
+            asyncio.run_coroutine_threadsafe(self._lifecycle_action("shutdown"), self._loop)
+            return True
+        if low in ("what app is open", "what is open", "which app is open", "what am i using", "what window is open"):
+            self.ui.write_log("SYS: " + self._active_app_context().replace("\n", " | "))
+            return True
+        if low in ("mute", "mute jarvis") or low.endswith("mute my computer"):
+            try:
+                self._run_local_action("computer_settings", {"action": "mute"})
+                return True
+            except Exception:
+                return False
+        m = _re.match(r"^(?:open|launch|start)\\s+(.+)$", raw, _re.IGNORECASE)
+        if m and not any(x in low for x in ("website", "url", "http")):
+            app_name = m.group(1).strip()
+            if app_name:
+                self._run_local_action("open_app", {"app_name": app_name})
+                return True
+        return False
+
+    def _run_local_action(self, name: str, args: dict) -> str:
+        try:
+            if self._action_registry.has(name):
+                result = self._action_registry.run(
+                    name, args, {"player": self.ui, "speak": self.speak, "response": None, "session_memory": None}
+                )
+            elif name == "computer_settings":
+                result = "Local settings action unavailable."
+            else:
+                result = "Local action unavailable."
+            self.ui.write_log(f"SYS: {result}")
+            return str(result)
+        except Exception as e:
+            self.ui.write_log(f"ERR: Local command failed — {e}")
+            return str(e)
+
+    async def _lifecycle_action(self, action: str) -> None:
+        self.ui.write_log(f"SYS: {action.title()} requested.")
+        if action == "restart":
+            await self._save_session_summary()
+            await asyncio.sleep(0.8)
+            if not self._manager.restart():
+                self.ui.write_log("ERR: JARVIS restart failed.")
+        elif action == "shutdown":
+            await self._save_session_summary()
+            await asyncio.sleep(0.8)
+            self._manager.shutdown()
 
     def _tail_active(self) -> bool:
         """True while the speakers may still be finishing our last sentence."""
