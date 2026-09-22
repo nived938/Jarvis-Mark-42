@@ -134,47 +134,7 @@ class WakeWordDetector:
         self._phrase_stt = None
         self._last_phrase_wake = 0.0
 
-    def start(self) -> bool:
-        """Load the model and spawn the inference thread. Returns True on success.
-        Safe to call again — a no-op if already running. Never raises."""
-        if self._running:
-            return True
-        try:
-            from openwakeword.model import Model
-            self._model = Model(wakeword_models=[WAKE_MODEL], inference_framework="onnx")
-        except Exception as e:
-            self._logger(f"Wake word: could not load model — {e}")
-            self._notify("Wake word unavailable — use the WAKE NOW button.")
-            self._model = None
-            return False
-        # Optional phrase recognizer for manual sleep: "wake up Jarvis".
-        # The normal Hey Jarvis detector remains the primary path and still works
-        # when this secondary recognizer cannot be loaded.
-        try:
-            from core.stt import VoskSTT
-            self._phrase_stt = VoskSTT(language="en-us")
-            self._logger("Wake word: also listening for 'wake up Jarvis'.")
-        except Exception as e:
-            self._phrase_stt = None
-            self._logger(f"Wake word: phrase recognizer unavailable ({e}); Hey Jarvis remains available.")
-
-        self._running = True
-        self._ready = True
-        self._thread = threading.Thread(target=self._loop, daemon=True, name="WakeWordThread")
-        self._thread.start()
-        self._logger("Wake word: listening for 'Hey Jarvis'.")
-        return True
-
-    def stop(self) -> None:
-        self._running = False
-        # unblock the thread if it's waiting on the queue
-        try:
-            self._queue.put_nowait(None)
-        except Exception:
-            pass
-        self._model = None
-        self._ready = False
-
+    def start(self) -> bool:,        """Start any available local wake engine. Never raises.""",        if self._running:,            return True,,        openwake_ok = False,        try:,            from openwakeword.model import Model,            self._model = Model(wakeword_models=[WAKE_MODEL], inference_framework="onnx"),            openwake_ok = True,        except Exception as e:,            self._model = None,            self._logger(f"Wake word: Hey Jarvis engine unavailable ({e})."),,        try:,            from core.stt import VoskSTT,            self._phrase_stt = VoskSTT(language="en-us"),            self._logger("Wake word: also listening for 'wake up Jarvis'."),        except Exception as e:,            self._phrase_stt = None,            self._logger(f"Wake phrase engine unavailable ({e})."),,        if not openwake_ok and self._phrase_stt is None:,            self._notify("No local wake engine is available — use the WAKE NOW button."),            self._ready = False,            return False,,        self._running = True,        self._ready = True,        self._thread = threading.Thread(target=self._loop, daemon=True, name="WakeWordThread"),        self._thread.start(),        if openwake_ok:,            self._logger("Wake word: listening for 'Hey Jarvis'."),        return True,,    def stop(self) -> None:,        self._running = False,        try:,            self._queue.put_nowait(None),        except Exception:,            pass,        self._model = None,        self._phrase_stt = None,        self._ready = False,
     @property
     def ready(self) -> bool:
         return self._ready
