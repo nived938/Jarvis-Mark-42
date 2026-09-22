@@ -5370,6 +5370,14 @@ class JarvisUI:
         self._win.on_interrupt = cb
 
     @property
+    def on_emergency_kill(self):
+        return self._win.on_emergency_kill
+
+    @on_emergency_kill.setter
+    def on_emergency_kill(self, cb):
+        self._win.on_emergency_kill = cb
+
+    @property
     def on_voice_change(self):
         return self._win.on_voice_change
 
@@ -5492,6 +5500,20 @@ class JarvisUI:
     def show_content(self, title: str, text: str):
         """Thread-safe: display content in the panel below the HUD."""
         self._win._content_sig.emit(title[:48], text[:4000])
+
+    def show_weather(self, payload: dict) -> None:
+        """Thread-safe: update the persistent weather card beside the HUD."""
+        try:
+            self._win._weather_sig.emit(dict(payload or {}))
+        except Exception:
+            pass
+
+    def set_emergency_active(self, active: bool) -> None:
+        """Thread-safe: reflect the emergency-stop latch in the HUD."""
+        try:
+            self._win.set_emergency_active(bool(active))
+        except Exception:
+            pass
 
     def show_quiz(self, topic: str, questions, grade=None) -> None:
         """Thread-safe: put an interactive quiz on the board.
