@@ -947,16 +947,16 @@ class JarvisLive:
         return url, key, f"{url}/auto-login?key={key}", manual
 
     def _on_text_command(self, text: str):
-        if not self._loop or not self.session:
-            return
-        # Respect wake-word sleep: a typed command must not be answered while
-        # asleep either (the sleep gate is not just for the mic). Wake first with
-        # "Hey Jarvis" or the WAKE NOW button.
-        if (self._wake_enabled or self._manual_sleep) and not self._awake:
-            self.ui.write_log("SYS: I'm asleep — say 'wake up Jarvis' or tap WAKE NOW first.")
-            return
+        # Local computer commands are available even if Gemini is disconnected.
         local = self._queue_local_command(text)
         if local:
+            return
+        if not self._loop or not self.session:
+            self.ui.write_log("SYS: Gemini is not connected; only local commands are available.")
+            return
+        # Respect wake-word/manual sleep for model-backed commands.
+        if (self._wake_enabled or self._manual_sleep) and not self._awake:
+            self.ui.write_log("SYS: I'm asleep — say 'wake up Jarvis' or tap WAKE NOW first.")
             return
         context = self._active_app_context()
         payload = f"[ACTIVE APP CONTEXT]\n{context}\n\n[USER COMMAND]\n{text}"
@@ -1017,10 +1017,16 @@ class JarvisLive:
             self.sleep(reason="local command", manual=True)
             return True
         if any(k in low for k in ("restart jarvis", "reboot jarvis")):
-            asyncio.run_coroutine_threadsafe(self._lifecycle_action("restart"), self._loop)
+            if self._loop:
+                asyncio.run_coroutine_threadsafe(self._lifecycle_action("restart"), self._loop)
+            else:
+                self._manager.restart()
             return True
         if any(k in low for k in ("shutdown jarvis", "close jarvis", "exit jarvis", "stop jarvis")):
-            asyncio.run_coroutine_threadsafe(self._lifecycle_action("shutdown"), self._loop)
+            if self._loop:
+                asyncio.run_coroutine_threadsafe(self._lifecycle_action("shutdown"), self._loop)
+            else:
+                self._manager.shutdown()
             return True
         if low in ("what app is open", "what is open", "which app is open", "what am i using", "what window is open"):
             self.ui.write_log("SYS: " + self._active_app_context().replace("\n", " | "))
@@ -1460,6 +1466,8 @@ class JarvisLive:
                         None, lambda: _capture_screen(monitor=monitor)
                     )
                     vision_meta = f"screen monitor {monitor} OCR"
+                self._vision_busy = True
+                self._vision_last_time = time.monotonic()
                 self._pending_vision = (img_b, mime_t, ocr_question, angle, vision_meta)
                 result = "[VISION_ACTIVE] OCR image attached. Extract the text and return only the OCR result."
 
@@ -1647,7 +1655,7 @@ class JarvisLive:
             # detector, which runs its model in ITS OWN thread — the cost here is
             # only a queue push, so the audio path is never slowed. When wake word
             # is off (default) or we're awake, this is a single boolean check.
-            if self._wake_enabled and not self._awake:
+            if (self._wake_enabled or self._manual_sleep) and not self._awake:
                 det = self._wake_detector
                 if det is not None:
                     det.feed(indata)
