@@ -490,42 +490,64 @@ def _score(query_words: list[str], cat: str, key: str, value: str) -> int:
     return score
 
 
-def search_memory(query: str, limit: int = 8) -> str:
-    """Find stored facts matching `query`. Backs the recall_memory tool.
-
-    An empty query is treated as "show me everything you know", capped - the
-    model asks that when the user says "what do you remember about me?"."""
+def search_memory(query: str = "", limit: int = 8) -> str:
+    """Search stored memories using lexical relevance, importance, and recency."""
     memory = load_memory()
-    words  = [w for w in re.split(r"[^\w]+", (query or "").lower()) if len(w) > 1]
+    words = [w for w in re.split(r"[^\w]+", (query or "").lower()) if len(w) > 1]
 
-    rows: list[tuple[int, str, str, str]] = []
+    rows: list[tuple[int, int, str, str, str, str]] = []
     for cat, items in memory.items():
         if not isinstance(items, dict):
-            continue                     # skip 'sessions', which is a list
+            continue
         for key, entry in items.items():
             val = _entry_value(entry)
             if not val:
                 continue
-            s = _score(words, cat, key, val) if words else 1
-            if s > 0:
+
+            score = _score(words, cat, key, val) if words else 1
+            if score <= 0:
+                continue
+
+            if isinstance(entry, dict):
                 try:
-            importance = max(1, min(MAX_MEMORY_IMPORTANCE, int(entry.get("importance", 1))))
-        except (TypeError, ValueError):
-            importance = 1
-        updated = (entry.get("updated", "") if isinstance(entry, dict) else "") or "0000-00-00"
-        rows.append((s, importance, updated, cat, key, val))
+                    importance = max(
+                        1,
+                        min(MAX_MEMORY_IMPORTANCE, int(entry.get("importance", 1) or 1)),
+                    )
+                except (TypeError, ValueError):
+                    importance = 1
+                updated = entry.get("updated", "") or "0000-00-00"
+            else:
+                importance = 1
+                updated = "0000-00-00"
+
+            rows.append((score, importance, updated, cat, key, val))
 
     if not rows:
-        return (f"Nothing stored about '{query}'." if query
-                else "I have not stored anything about this person yet.")
+        return (
+            f"Nothing stored about '{query}'."
+            if query
+            else "I have not stored anything about this person yet."
+        )
 
-    rows.sort(key=lambda r: (-r[0], -r[1], r[2], r[4]))
-    lines = [f"{cat}/{_pretty(key)}: {val}" for _s, _imp, _updated, cat, key, val in rows[:max(1, limit)]]
-    head  = (f"Stored facts matching '{query}':" if query
-             else "Everything currently stored:")
-    more  = (f"\n(+{len(rows) - len(lines)} more — search with a narrower keyword)"
-             if len(rows) > len(lines) else "")
-    return head + "\n" + "\n".join(lines) + more
+    rows.sort(key=lambda row: (-row[0], -row[1], row[2], row[4]))
+    lines_out = [
+        f"{cat}/{_pretty(key)}: {val}"
+        for _score_value, _importance, _updated, cat, key, val
+        in rows[: max(1, limit)]
+    ]
+    head = (
+        f"Stored facts matching '{query}':"
+        if query
+        else "Everything currently stored:"
+    )
+    more = (
+        f"\n(+{len(rows) - len(lines_out)} more — search with a narrower keyword)"
+        if len(rows) > len(lines_out)
+        else ""
+    )
+    return head + "\n" + "\n".join(lines_out) + more
+
 
 
 def all_entries_for_ui() -> list[dict]:
@@ -568,7 +590,6 @@ def forget(key: str, category: str = "notes") -> str:
     return f"Not found: {category}/{key}"
 
 
-forget_memory = forget
 
 
 # ── Session memory ─────────────────────────────────────────────────────────────
