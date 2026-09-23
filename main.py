@@ -2773,10 +2773,6 @@ class JarvisLive:
                     self._vision_busy          = False
                     self._vision_last_time     = 0.0
                     self._interrupted          = False
-                    self._client_speech_active = False
-                    self._client_last_voice = 0.0
-                    self._client_vad_end_sent = False
-                    self._client_preroll.clear()
 
                     print("[JARVIS] Connected.")
                     if _resumed_with:
