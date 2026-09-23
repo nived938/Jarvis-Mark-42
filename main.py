@@ -43,7 +43,6 @@ import sys
 import traceback
 from datetime import datetime
 from pathlib import Path
-from collections import deque
 
 import sounddevice as sd
 import numpy as np
@@ -727,13 +726,6 @@ class JarvisLive:
         self._no_progress = NoProgressGuard(repeat_limit=3)
         self._trace_id = trace_start_session()
 
-        # Hybrid VAD state: server-side VAD still detects speech onset, while
-        # the local client detects the end of speech and sends audio_stream_end
-        # immediately. This avoids waiting through a long server silence window.
-        self._client_speech_active = False
-        self._client_last_voice = 0.0
-        self._client_vad_end_sent = False
-        self._client_preroll = deque(maxlen=4)  # ~160 ms at 40 ms blocks
         self._client_turn_started = 0.0
         self._client_first_audio_logged = False
 
@@ -1964,13 +1956,6 @@ class JarvisLive:
     async def _send_realtime(self):
         while True:
             msg = await self.out_queue.get()
-            if msg.get("audio_stream_end"):
-                try:
-                    await self.session.send_realtime_input(audio_stream_end=True)
-                    print("[JARVIS] 🎤 Local VAD ended turn")
-                except Exception as exc:
-                    print(f"[JARVIS] ⚠️ Failed to finalize audio turn: {exc}")
-                continue
             await self.session.send_realtime_input(
                 audio=types.Blob(
                     data=msg["data"],
@@ -2045,58 +2030,17 @@ class JarvisLive:
             if not self.ui.muted and not self._phone_active:
                 data = indata.tobytes()
 
-                # Local speech gate + hybrid finalization.
-                #
-                # While silent we do not stream microphone frames at all. Once
-                # speech crosses the local threshold, send a tiny pre-roll so
-                # the first syllable is preserved, then stream normally.
-                # After sustained silence, send the final block followed by
-                # audio_stream_end and stay gated until the next speech.
-                level = _pcm_level(indata)
-                now = time.monotonic()
-                speech_start = 0.08
-                speech_end = 0.04
-                hangover = 0.32
-
-                self._client_preroll.append(data)
-
-                if not self._client_speech_active:
-                    if level < speech_start:
-                        return
-
-                    self._client_speech_active = True
-                    self._client_last_voice = now
+                # Stream microphone PCM continuously. Gemini 3.8 Live's
+                # automatic server VAD handles speech boundaries. A short
+                # server silence window below keeps turn finalization fast.
+                if level >= 0.08 and self._client_turn_started == 0.0:
                     self._client_turn_started = now
                     self._client_first_audio_logged = False
-                    self._client_vad_end_sent = False
-
-                    for buffered in self._client_preroll:
-                        loop.call_soon_threadsafe(
-                            self.out_queue.put_nowait,
-                            {"data": bytes(buffered), "mime_type": "audio/pcm;rate=16000"}
-                        )
-                    return
-
-                should_end_turn = False
-                if level >= speech_end:
-                    self._client_last_voice = now
-                elif now - self._client_last_voice >= hangover:
-                    should_end_turn = True
-                    self._client_vad_end_sent = True
-                    self._client_speech_active = False
 
                 loop.call_soon_threadsafe(
                     self.out_queue.put_nowait,
                     {"data": data, "mime_type": "audio/pcm;rate=16000"}
                 )
-                if should_end_turn:
-                    loop.call_soon_threadsafe(
-                        self.out_queue.put_nowait,
-                        {"audio_stream_end": True}
-                    )
-                    self._client_preroll.clear()
-                    self._client_turn_started = 0.0
-                    self._client_first_audio_logged = False
 
                 # Feed the live mic level to the HUD so the waveform reacts to
                 # the user's actual voice while listening. Purely cosmetic — any
