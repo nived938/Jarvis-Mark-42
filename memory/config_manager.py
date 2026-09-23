@@ -189,7 +189,7 @@ def get_turn_tuning() -> dict:
 
     return {
         "enabled":    bool(cfg.get("enabled", True)),
-        "silence_ms": _int("silence_ms", 350, 100, 3000),
+        "silence_ms": _int("silence_ms", 120, 50, 3000),
         "prefix_ms":  _int("prefix_ms", 120, 0, 1000),
         # "high" = quicker to decide speech has ended.
         "end_sensitivity":   str(cfg.get("end_sensitivity", "high")).lower(),
