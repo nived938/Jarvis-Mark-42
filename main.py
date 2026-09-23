@@ -43,6 +43,7 @@ import sys
 import traceback
 from datetime import datetime
 from pathlib import Path
+from collections import deque
 
 import sounddevice as sd
 import numpy as np
@@ -732,6 +733,7 @@ class JarvisLive:
         self._client_speech_active = False
         self._client_last_voice = 0.0
         self._client_vad_end_sent = False
+        self._client_preroll = deque(maxlen=4)  # ~160 ms at 40 ms blocks
 
         self._enhanced_live = True  # current Live model; kept for API-version fallback handling
         self._tuned_live    = True  # turn-taking / media / thinking knobs; same fallback
@@ -2043,37 +2045,44 @@ class JarvisLive:
                 now = time.monotonic()
                 level = _pcm_level(indata)
 
-                # Hybrid VAD:
-                # - server VAD remains responsible for speech onset
-                # - local energy VAD watches for sustained silence after speech
-                # - audio_stream_end immediately finalizes the turn
+                # Local speech gate + hybrid finalization.
                 #
-                # Hysteresis avoids triggering from room noise: a little louder
-                # is needed to declare speech, while a lower threshold plus a
-                # short hangover ends it quickly.
+                # While silent we do not stream microphone frames at all. Once
+                # speech crosses the local threshold, send a tiny pre-roll so
+                # the first syllable is preserved, then stream normally.
+                # After sustained silence, send the final block followed by
+                # audio_stream_end and stay gated until the next speech.
+                level = _pcm_level(indata)
+                now = time.monotonic()
                 speech_start = 0.08
                 speech_end = 0.04
                 hangover = 0.32
 
-                should_end_turn = False
-                if not self._client_speech_active:
-                    if level >= speech_start:
-                        self._client_speech_active = True
-                        self._client_last_voice = now
-                        self._client_vad_end_sent = False
-                else:
-                    if level >= speech_end:
-                        self._client_last_voice = now
-                    elif (
-                        not self._client_vad_end_sent
-                        and now - self._client_last_voice >= hangover
-                    ):
-                        should_end_turn = True
-                        self._client_vad_end_sent = True
-                        self._client_speech_active = False
+                self._client_preroll.append(data)
 
-                # Always place the current audio block before the finalization
-                # marker so the server receives the last samples first.
+                if not self._client_speech_active:
+                    if level < speech_start:
+                        return
+
+                    self._client_speech_active = True
+                    self._client_last_voice = now
+                    self._client_vad_end_sent = False
+
+                    for buffered in self._client_preroll:
+                        loop.call_soon_threadsafe(
+                            self.out_queue.put_nowait,
+                            {"data": bytes(buffered), "mime_type": "audio/pcm;rate=16000"}
+                        )
+                    return
+
+                should_end_turn = False
+                if level >= speech_end:
+                    self._client_last_voice = now
+                elif now - self._client_last_voice >= hangover:
+                    should_end_turn = True
+                    self._client_vad_end_sent = True
+                    self._client_speech_active = False
+
                 loop.call_soon_threadsafe(
                     self.out_queue.put_nowait,
                     {"data": data, "mime_type": "audio/pcm;rate=16000"}
@@ -2083,6 +2092,8 @@ class JarvisLive:
                         self.out_queue.put_nowait,
                         {"audio_stream_end": True}
                     )
+                    self._client_preroll.clear()
+
                 # Feed the live mic level to the HUD so the waveform reacts to
                 # the user's actual voice while listening. Purely cosmetic — any
                 # failure here must never disturb the mic.
@@ -2820,6 +2831,7 @@ class JarvisLive:
                     self._client_speech_active = False
                     self._client_last_voice = 0.0
                     self._client_vad_end_sent = False
+                    self._client_preroll.clear()
 
                     print("[JARVIS] Connected.")
                     if _resumed_with:
