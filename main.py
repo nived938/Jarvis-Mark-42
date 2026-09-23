@@ -421,10 +421,9 @@ TOOL_DECLARATIONS = [
     {
         "name": "shutdown_jarvis",
         "description": (
-            "Shuts down the assistant completely. "
-            "Call this when the user expresses intent to end the conversation, "
-            "close the assistant, say goodbye, or stop Jarvis. "
-            "The user can say this in ANY language."
+            "Shuts down the JARVIS application only when the user's explicit command "
+            "ends with the word 'jarvis', such as 'shutdown jarvis'. Never call this "
+            "for a bare 'close', 'close it', 'stop', 'exit', or other generic wording."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -569,12 +568,12 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "sleep_jarvis",
-        "description": "Put JARVIS itself to sleep. While asleep it does not send user speech to Gemini. It wakes when the user says 'wake up Jarvis' or 'Hey Jarvis', when supported.",
+        "description": "Put JARVIS itself to sleep only when the user explicitly says 'sleep jarvis'. Generic 'sleep' must not call this tool.",
         "parameters": {"type": "OBJECT", "properties": {}}
     },
     {
         "name": "restart_jarvis",
-        "description": "Restart the JARVIS application itself, not the operating system. Save session state, start a fresh JARVIS process, then close the current process.",
+        "description": "Restart the JARVIS application itself only when the user explicitly says 'restart jarvis'. Generic 'restart' or 'reboot' must not call this tool.",
         "parameters": {"type": "OBJECT", "properties": {}}
     },
     {
