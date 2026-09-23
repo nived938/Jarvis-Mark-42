@@ -63,49 +63,60 @@ def _request_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def _public_ip() -> str:
-    try:
-        data = requests.get(IPIFY_URL, timeout=5).json()
-        ip = str(data.get("ip", "")).strip()
-        if ip:
-            return ip
-    except Exception:
-        pass
-    return ""
-
-
-def _ip_location(ip: str) -> dict[str, Any]:
-    """Best-effort fallback geolocation used only when Weatherstack IP lookup fails."""
-    if not ip:
-        return {}
+def _ip_location() -> dict[str, Any]:
+    """Resolve the current public-IP location to a city/region."""
     try:
         response = requests.get(
             IPAPI_URL,
-            params={"ip": ip},
-            timeout=5,
+            timeout=6,
             headers={"User-Agent": "JARVIS Weather"},
         )
         response.raise_for_status()
         data = response.json()
-        if isinstance(data, dict):
-            return {
-                "city": data.get("city") or "",
-                "region": data.get("region") or data.get("region_code") or "",
-                "country": data.get("country_name") or data.get("country") or "",
-                "latitude": data.get("latitude"),
-                "longitude": data.get("longitude"),
-            }
+        if not isinstance(data, dict):
+            return {}
+        ip = str(data.get("ip") or "").strip()
+        return {
+            "ip": ip,
+            "city": str(data.get("city") or "").strip(),
+            "region": str(data.get("region") or data.get("region_code") or "").strip(),
+            "country": str(data.get("country_name") or data.get("country") or "").strip(),
+            "latitude": data.get("latitude"),
+            "longitude": data.get("longitude"),
+        }
     except Exception:
-        pass
-    return {}
+        return {}
 
 
 def _query_for(parameters: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     city = str(parameters.get("city") or "").strip()
-    if city:
+    if city and city.casefold() not in {
+        "here", "my location", "my area", "my place",
+        "current location", "where i am", "where i am now",
+    }:
         return city, "named", {}
 
-    ip = _public_ip()
+    geo = _ip_location()
+    resolved_city = str(geo.get("city") or "").strip()
+    if resolved_city:
+        # Weatherstack gets the resolved city rather than the word "here".
+        locality = ", ".join(
+            x for x in (resolved_city, geo.get("region"), geo.get("country")) if x
+        )
+        return locality, "ip-city", {
+            "public_ip": geo.get("ip", ""),
+            "ip_city": resolved_city,
+            "ip_region": geo.get("region", ""),
+            "ip_country": geo.get("country", ""),
+            "ip_latitude": geo.get("latitude"),
+            "ip_longitude": geo.get("longitude"),
+        }
+
+    # Last resort: Weatherstack can still resolve a raw public IP.
+    try:
+        ip = str(requests.get(IPIFY_URL, timeout=5).json().get("ip", "")).strip()
+    except Exception:
+        ip = ""
     if ip:
         return ip, "ip", {"public_ip": ip}
     return "", "unknown", {}
