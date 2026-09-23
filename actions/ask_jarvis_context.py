@@ -33,13 +33,15 @@ def _send_context_path(path):
         return 1
 
 def _handler(parameters, player=None, **_):
-    mode=str(parameters.get("mode","text")).lower()
-    value=str(parameters.get("value","") or "").strip()
-    if not value: return "Provide the selected text or file path."
+    action=str(parameters.get("action","send")).lower()
     if action=="install_menu":
         return _install_windows_context_menu()
-    if action=="send":
-        mode=str(parameters.get("mode","text")).lower()
+    if action!="send":
+        return "Context action must be send or install_menu."
+    mode=str(parameters.get("mode","text")).lower()
+    value=str(parameters.get("value","") or "").strip()
+    if not value:
+        return "Provide the selected text or file path."
     if mode=="file":
         if not os.path.exists(value): return f"File not found: {value}"
         if player and callable(getattr(player,"send_text_command",None)):
