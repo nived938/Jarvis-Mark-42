@@ -1167,6 +1167,28 @@ class JarvisLive:
             self.ui.write_log("SYS: Camera HUD closed.")
             return True
 
+        # Camera commands must be handled before generic "open <app>" matching.
+        # Otherwise "open camera" can launch a Windows Camera.lnk instead of the
+        # persistent live camera inside the JARVIS HUD.
+        camera_open_phrases = (
+            "open camera",
+            "open the camera",
+            "start camera",
+            "start the camera",
+            "turn on camera",
+            "turn on the camera",
+            "show camera",
+            "show the camera",
+            "camera on",
+        )
+        if low in camera_open_phrases:
+            if self.ui.is_camera_hud_open():
+                self.ui.write_log("SYS: Camera HUD is already open.")
+            else:
+                self.ui.start_camera_stream()
+                self.ui.write_log("SYS: Camera HUD opened and will stay open until you say close camera.")
+            return True
+
         # Windows app/window controls: keep common screen-management commands
         # local so they are immediate and do not require a Gemini tool-call round trip.
         app_match = _re.match(
