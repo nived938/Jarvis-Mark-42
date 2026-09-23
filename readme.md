@@ -16,7 +16,7 @@ It ships as **zero extra dependencies and one 25 KB asset**. The face is real me
 The face is also the fastest status indicator in the app: it looks away while thinking, meets your eyes while listening, and lets its lids fall while asleep.
 
 ### 🌦️ Weatherstack HUD
-Weather is handled through the Weatherstack API rather than browser search. With no city in the request, JARVIS first determines the public IP and lets Weatherstack resolve that approximate location. The current report is shown in a compact card beside the HUD and the full report appears in the existing content panel; automatic refresh runs periodically while JARVIS is open.
+Weather is handled through the Weatherstack live weather opens as a temporary animated HUD screen and the full report appears in the existing content panel; automatic refresh runs periodically while JARVIS is open.
 
 Underneath, Mark LIV rebuilt how the assistant knows itself — what it is, what machine it runs on, what it can do and, new, **what it cannot do** — all assembled from the live system at session start rather than written into a prompt that goes stale.
 
@@ -31,7 +31,7 @@ Mark 43 expands the existing architecture without renaming the original modules.
 This feature expansion also adds speaker identity profiles, a personal activity timeline, goal/OKR tracking, a workflow recorder, a local notification inbox, JARVIS Focus Mode, clipboard history, a read-only JARVIS Doctor, per-application Windows audio control, software update management, connected-device inventory, and an idle-time file path index for fast file discovery/opening.
 It also adds a persistent stopwatch and a Windows Settings controller with broad Settings-page navigation, Wi-Fi/Bluetooth controls, and supported direct user-level settings changes.
 The new Mark 43 safety layer adds a fail-closed Emergency Kill Switch and guarded JARVIS Self-Modification. Emergency mode blocks new JARVIS-controlled actions and speech until explicitly released. Self-modification validates generated source, stages the proposal, and requires a human confirmation on the HUD before changing JARVIS source; approved edits are backed up and undoable. Existing filenames are preserved; these are additional modules and targeted edits.
-Weather no longer opens Google/browser search. weather_report calls Weatherstack directly, detects the public IP when no city is supplied, refreshes the compact weather HUD automatically, and puts richer reports in the existing content panel.
+Weather no longer opens Google/browser search. weather_report calls Weatherstack live weather opens as a temporary animated HUD screen automatically, and puts richer reports in the existing content panel.
 
 The existing filenames are preserved. New capabilities are implemented as additional `actions/*.py` modules plus targeted edits to `main.py`, `core/prompt.txt`, and `ui.py`.
 
@@ -74,7 +74,7 @@ The existing filenames are preserved. New capabilities are implemented as additi
 | 🗓️ Session Memory | Summarises each conversation and mentions it naturally next morning — consumed after use, never repeats |
 | 👁️‍🗨️ Background Monitoring | User-configured topic watching — checks for new headlines once a day and alerts naturally |
 | 📊 Hardware Monitoring | Continuous CPU, RAM, GPU and temperature telemetry with localized voice alerts |
-| 🌤️ Weather Report | Weatherstack-powered live weather, automatic public-IP location, compact HUD card, and detailed current/forecast reports when supported |
+| 🌤️ Weather Report | Weatherstack live weather opens as a temporary animated HUD screen card, and detailed current/forecast reports when supported |
 | 🗺️ Dynamic Content Panel | Scrollable display layer beneath the HUD that renders web results, news, and search data |
 | 🔍 Multi-Mode Web Search | `news` / `research` / `price` / `compare` / `search` — Gemini Grounded first, DDG fallback |
 | ⏰ Smart Reminders | OS-native scheduled notifications (Windows Task Scheduler / macOS LaunchAgent / Linux systemd) |
