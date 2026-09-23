@@ -661,8 +661,6 @@ class JarvisLive:
         self._speaking_lock       = threading.Lock()
         self._phone_active        = False   # True while phone mic is streaming; pauses PC mic
         self._pending_vision       = None    # (img_bytes, mime_type, question, angle) to inject after tool response
-        self._vision_cam_active    = False   # True if camera was opened for vision → auto-close after response
-        self._vision_close_pending = False   # True after vision injected; next turn_complete closes camera
         self._vision_last_time     = 0.0     # monotonic time of last screen_process call (cooldown guard)
         self._vision_busy          = False   # True while a vision capture/inject cycle is in flight
         self._interrupted          = False   # True while draining audio after user interrupt
@@ -1835,7 +1833,6 @@ class JarvisLive:
                     if angle == "camera":
                         img_b, mime_t = await loop.run_in_executor(None, _capture_camera)
                         self.ui.start_camera_stream()
-                        self._vision_cam_active = True
                         print(f"[Vision] 📷 Camera: {len(img_b):,} bytes")
                         _stall = "camera"
                         vision_meta = "webcam"
@@ -1875,7 +1872,6 @@ class JarvisLive:
                 if angle == "camera":
                     img_b, mime_t = await loop.run_in_executor(None, _capture_camera)
                     self.ui.start_camera_stream()
-                    self._vision_cam_active = True
                     vision_meta = "webcam OCR"
                 else:
                     img_b, mime_t = await loop.run_in_executor(
@@ -2225,13 +2221,10 @@ class JarvisLive:
             turn_complete=True,
         )
 
-        if self._vision_cam_active:
-            # Camera: stay busy until JARVIS has finished speaking the answer,
-            # then close the preview.
-            self._vision_cam_active    = False
-            self._vision_close_pending = True
-        else:
-            self._vision_busy = False
+        # The camera HUD is persistent by design. A vision answer completes
+        # without closing the live camera view. The view is closed only through
+        # close_camera, the HUD close button, or a matching spoken close command.
+        self._vision_busy = False
         return True
 
     async def _receive_audio(self):
@@ -2350,14 +2343,9 @@ class JarvisLive:
                                     }))
                             out_buf = []
 
-                            if self._vision_close_pending:
-                                # This turn_complete IS the vision answer — close camera + release busy flag
-                                self._vision_close_pending = False
-                                self._vision_busy = False
-                                async def _cam_close():
-                                    await asyncio.sleep(2.0)
-                                    self.ui.stop_camera_stream()
-                                asyncio.create_task(_cam_close())
+                            # Vision is complete. Leave a live camera view open
+                            # until the user explicitly asks JARVIS to close it.
+                            self._vision_busy = False
 
                     if response.tool_call:
                         fn_responses = []
