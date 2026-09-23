@@ -172,8 +172,8 @@ def save_thinking_enabled(enabled: bool) -> None:
 def get_turn_tuning() -> dict:
     """How eagerly the server decides you have stopped speaking.
 
-    Enabled by default with a 600 ms silence window to keep voice responses
-    responsive while still tolerating normal pauses.
+    Enabled by default with a 120 ms silence window to prioritize fast voice
+    responses. Increase it when longer natural pauses need to stay in one turn.
 
     Set "turn_tuning": {"enabled": false} to restore the server defaults.
     "silence_ms" is the main latency control.
