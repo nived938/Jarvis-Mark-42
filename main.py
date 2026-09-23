@@ -384,6 +384,16 @@ TOOL_DECLARATIONS = [
         "parameters": {"type": "OBJECT", "properties": {}, "required": []}
     },
     {
+        "name": "close_weather",
+        "description": (
+            "Closes the temporary full weather HUD screen and returns to the normal "
+            "animated JARVIS HUD. Use when the user says close weather, close the "
+            "weather screen, hide weather, close it, close that, or asks to return "
+            "to the normal HUD after viewing weather."
+        ),
+        "parameters": {"type": "OBJECT", "properties": {}, "required": []}
+    },
+    {
         "name": "manage_monitor",
         "description": (
             "Add, remove, or list background monitoring topics. "
@@ -1067,6 +1077,19 @@ class JarvisLive:
             self._run_local_action("emergency_kill_switch", {"action": "release", "_local": True})
             return True
 
+        # Weather HUD close controls stay local so they work even if the
+        # cloud model is busy or temporarily disconnected.
+        if any(k in low for k in (
+            "close weather", "close weather hud", "close weather screen",
+            "hide weather", "exit weather", "dismiss weather",
+        )) or (
+            self.ui.is_weather_hud_open()
+            and low in ("close it", "close that", "hide it", "hide that")
+        ):
+            self.ui.stop_weather_view()
+            self.ui.write_log("SYS: Weather HUD closed.")
+            return True
+
         # Weather is a direct local API action — never route weather requests
         # through browser search or generic web_search.
         if (
@@ -1204,6 +1227,10 @@ class JarvisLive:
             self.interrupt()
             try:
                 self.ui.stop_camera_stream()
+            except Exception:
+                pass
+            try:
+                self.ui.stop_weather_view()
             except Exception:
                 pass
             self._awake = False
@@ -1760,6 +1787,10 @@ class JarvisLive:
             elif name == "close_camera":
                 self.ui.stop_camera_stream()
                 result = "Camera closed."
+
+            elif name == "close_weather":
+                self.ui.stop_weather_view()
+                result = "Weather HUD closed."
 
             elif name == "system_status":
                 r = await loop.run_in_executor(None, get_system_status)
