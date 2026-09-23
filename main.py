@@ -93,6 +93,13 @@ from actions.workflow_recorder import record_tool_call
 from actions.notification_inbox import add_notification
 from actions.focus_mode import is_active as focus_mode_active
 from actions.weather_report import start_auto_refresh as start_weather_auto_refresh
+from actions.app_crash_guardian import start_watcher as start_crash_guardian
+from actions.usb_device_intelligence import _handler as usb_device_action
+from actions.download_watcher import _handler as download_watcher_action
+from actions.context_action_bubble import _handler as context_action_handler
+from actions.guest_session import is_active as guest_session_active
+from core.execution_trace import start_session as trace_start_session, tool_start as trace_tool_start, tool_end as trace_tool_end
+from core.no_progress import NoProgressGuard
 
 # How long the assistant stays awake with no user speech before it auto-sleeps
 # again (wake-word mode only).
@@ -716,6 +723,9 @@ class JarvisLive:
         self._proactive        = ProactiveEngine()
         self._last_user_speech = time.monotonic()  # updated on every user utterance
         self._session_log: list[str] = []          # conversation turns for end-of-session summary
+        self._current_turn_text = ""
+        self._no_progress = NoProgressGuard(repeat_limit=3)
+        self._trace_id = trace_start_session()
 
         self._enhanced_live = True  # proactive audio; auto-disabled if the server rejects it
         self._tuned_live    = True  # turn-taking / media / thinking knobs; same fallback
@@ -751,6 +761,25 @@ class JarvisLive:
         except Exception as e:
             print(f"[Emergency] Bind failed: {e}")
         start_weather_auto_refresh(self.ui)
+
+        # New desktop intelligence services.
+        try:
+            start_crash_guardian(self.ui)
+        except Exception as exc:
+            print(f"[CrashGuardian] Start failed: {exc}")
+        try:
+            usb_device_action({"action": "start"}, player=self.ui)
+        except Exception as exc:
+            print(f"[USB] Start failed: {exc}")
+        try:
+            download_watcher_action({"action": "start"}, player=self.ui)
+        except Exception as exc:
+            print(f"[Downloads] Start failed: {exc}")
+        try:
+            context_action_handler({"action": "start"}, player=self.ui)
+        except Exception as exc:
+            print(f"[Context] Start failed: {exc}")
+
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
 
         # ── Wake word ────────────────────────────────────────────────────────
@@ -1201,7 +1230,15 @@ class JarvisLive:
 
     def _run_local_action(self, name: str, args: dict) -> str:
         try:
-            if emergency_stop.is_active() and name != "emergency_kill_switch":
+            if guest_session_active() and name in {"save_memory","forget_memory","recall_memory","manage_routine"}:
+            result = "Guest session is active. Personal memory access is disabled."
+            self.ui.write_log("SYS: " + result)
+            return types.FunctionResponse(
+                id=fc.id, name=name,
+                response={"result": result, "blocked": True},
+            )
+
+        if emergency_stop.is_active() and name != "emergency_kill_switch":
                 result = "Emergency stop is active. The requested local action was not performed."
                 self.ui.write_log("SYS: " + result)
                 return result
@@ -2131,6 +2168,8 @@ class JarvisLive:
                         if sc.input_transcription and sc.input_transcription.text:
                             txt = _clean_transcript(sc.input_transcription.text)
                             if txt:
+                                if not in_buf:
+                                    self._no_progress.reset()
                                 in_buf.append(txt)
                                 self._current_turn_text = " ".join(in_buf).strip()
                                 self._last_user_speech = time.monotonic()
@@ -2208,7 +2247,33 @@ class JarvisLive:
                         fn_responses = []
                         for fc in response.tool_call.function_calls:
                             print(f"[JARVIS] 📞 {fc.name}")
-                            fr = await self._execute_tool(fc)
+                            _tool_args = dict(fc.args or {})
+                            _started = time.perf_counter()
+                            trace_tool_start(fc.name, _tool_args)
+                            allowed, repeat_count = self._no_progress.check(fc.name, _tool_args)
+                            if not allowed:
+                                _msg = (
+                                    f"JARVIS stopped a repeated no-progress tool call: "
+                                    f"{fc.name} was requested {repeat_count} times with identical arguments."
+                                )
+                                self.ui.write_log("SYS: " + _msg)
+                                fr = types.FunctionResponse(
+                                    id=fc.id, name=fc.name,
+                                    response={"result": _msg, "blocked": True, "no_progress": True},
+                                )
+                            else:
+                                fr = await self._execute_tool(fc)
+                            _elapsed = time.perf_counter() - _started
+                            try:
+                                _result = getattr(fr, "response", None)
+                            except Exception:
+                                _result = None
+                            trace_tool_end(
+                                fc.name,
+                                _result,
+                                error=None,
+                                duration=_elapsed,
+                            )
                             fn_responses.append(fr)
                         await self.session.send_tool_response(
                             function_responses=fn_responses
@@ -2495,12 +2560,13 @@ class JarvisLive:
     async def _save_session_summary(self) -> None:
         """Summarise the current session in 1-2 sentences and save to long_term.json."""
         log = self._session_log
+        if guest_session_active():
+            return
         if len(log) < 3:          # need at least one exchange to be worth saving
             return
         self._session_log = []
         # Raw user text for the currently active Gemini turn. Used to guard
         # lifecycle tools so generic words like "close" can never shut down JARVIS.
-        self._current_turn_text = ""    # reset immediately so the next session starts clean
 
         memory = load_memory()
         lang_entry = memory.get("identity", {}).get("language", {})
