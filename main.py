@@ -1091,6 +1091,18 @@ class JarvisLive:
             self.ui.write_log("SYS: " + self._active_app_context().replace("\n", " | "))
             return True
 
+        # Context-menu installation is a local Windows action. Handle it without
+        # waiting for Gemini to choose the tool, so this command always responds.
+        if low in (
+            "install ask jarvis context menu",
+            "install ask jarvis right click menu",
+            "add ask jarvis context menu",
+            "add ask jarvis to right click menu",
+        ):
+            result = self._run_local_action("ask_jarvis_context", {"action": "install_menu"})
+            self.ui.write_log("SYS: " + str(result))
+            return True
+
         # Emergency stop controls are always local and remain available
         # even while the emergency latch is engaged so release can never depend
         # on the cloud model.
