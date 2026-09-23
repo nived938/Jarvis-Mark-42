@@ -250,19 +250,17 @@ def _load_weather(parameters: dict[str, Any]) -> tuple[dict[str, Any], str, str]
 
 
 def _push_hud(player, payload: dict[str, Any], detailed: str) -> None:
+    """Push the complete weather snapshot into the temporary weather HUD."""
     if not player:
         return
+    data = dict(payload or {})
+    data["hud_detail"] = detailed
+    data["hud_mode"] = "weather"
     try:
         if hasattr(player, "show_weather"):
-            player.show_weather(payload)
+            player.show_weather(data)
     except Exception as exc:
-        print(f"[Weather] HUD weather card failed: {exc}")
-    try:
-        if hasattr(player, "show_content"):
-            title = f"WEATHER • {payload.get('location', 'Unknown')}"
-            player.show_content(title, detailed)
-    except Exception as exc:
-        print(f"[Weather] HUD detail panel failed: {exc}")
+        print(f"[Weather] Weather HUD update failed: {exc}")
 
 
 def weather_action(parameters: dict, player=None, session_memory=None) -> str:
@@ -273,10 +271,6 @@ def weather_action(parameters: dict, player=None, session_memory=None) -> str:
     try:
         payload, query, mode = _load_weather(p)
         current_text = _format_current(payload)
-
-        # The current card is useful even when the subscription does not expose
-        # forecast data, so publish it before attempting the optional forecast call.
-        _push_hud(player, payload, current_text)
 
         detailed = current_text
         if report in {"forecast", "full", "detailed"}:
@@ -290,7 +284,10 @@ def weather_action(parameters: dict, player=None, session_memory=None) -> str:
                     + str(forecast_error)
                 )
 
-        _push_hud(player, payload, detailed)
+        # The interactive weather HUD opens only for a user-requested weather
+        # view. Background refreshes update the cache without interrupting the HUD.
+        if bool(p.get("_show_hud", True)):
+            _push_hud(player, payload, detailed)
 
         if session_memory:
             try:
@@ -324,7 +321,11 @@ def weather_action(parameters: dict, player=None, session_memory=None) -> str:
 def _refresh_loop(player) -> None:
     while not _refresh_stop.wait(AUTO_REFRESH_SECONDS):
         try:
-            weather_action({"report": "current"}, player=player, session_memory=None)
+            weather_action(
+            {"report": "current", "_show_hud": False},
+            player=player,
+            session_memory=None,
+        )
         except Exception as exc:
             print(f"[Weather] Auto-refresh error: {exc}")
 
@@ -339,7 +340,11 @@ def start_auto_refresh(player) -> None:
 
     def _first_fetch() -> None:
         try:
-            weather_action({"report": "current"}, player=player, session_memory=None)
+            weather_action(
+                {"report": "current", "_show_hud": False},
+                player=player,
+                session_memory=None,
+            )
         except Exception as exc:
             print(f"[Weather] Initial HUD refresh error: {exc}")
 
