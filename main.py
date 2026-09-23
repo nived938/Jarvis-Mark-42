@@ -1230,33 +1230,41 @@ class JarvisLive:
 
     def _run_local_action(self, name: str, args: dict) -> str:
         try:
-            if guest_session_active() and name in {"save_memory","forget_memory","recall_memory","manage_routine"}:
-            result = "Guest session is active. Personal memory access is disabled."
-            self.ui.write_log("SYS: " + result)
-            return types.FunctionResponse(
-                id=fc.id, name=name,
-                response={"result": result, "blocked": True},
-            )
+            if guest_session_active() and name in {"save_memory", "forget_memory", "recall_memory", "manage_routine"}:
+                result = "Guest session is active. Personal memory access is disabled."
+                self.ui.write_log("SYS: " + result)
+                return result
 
-        if emergency_stop.is_active() and name != "emergency_kill_switch":
+            if emergency_stop.is_active() and name != "emergency_kill_switch":
                 result = "Emergency stop is active. The requested local action was not performed."
                 self.ui.write_log("SYS: " + result)
                 return result
+
             if self._action_registry.has(name):
                 result = self._action_registry.run(
-                    name, args, {"player": self.ui, "speak": self.speak, "response": None, "session_memory": None}
+                    name,
+                    args,
+                    {
+                        "player": self.ui,
+                        "speak": self.speak,
+                        "response": None,
+                        "session_memory": None,
+                    },
                 )
             elif name == "computer_settings":
                 result = "Local settings action unavailable."
             else:
                 result = "Local action unavailable."
+
             self.ui.write_log(f"SYS: {result}")
             result_text = str(result)
+
             if name == "weather_report" and args.get("_speak_result"):
                 # Local weather bypasses Gemini's normal user-turn path, so
                 # explicitly send the completed result into the active Live
                 # session for spoken delivery.
                 self.speak(result_text)
+
             return result_text
         except Exception as e:
             self.ui.write_log(f"ERR: Local command failed — {e}")
