@@ -441,9 +441,86 @@ class HudCanvas(QWidget):
         self._base_scale = 1.0    # slow "breathing" target; amp is added per-frame
         self._base_halo  = 55.0
 
+        # Compact live weather card over the HUD itself.
+        self._weather_hud = QFrame(self)
+        self._weather_hud.setStyleSheet(f"""
+            QFrame {{
+                background: rgba(0, 13, 20, 225);
+                border: 1px solid {C.BORDER_B};
+                border-radius: 7px;
+            }}
+        """)
+        _wl = QVBoxLayout(self._weather_hud)
+        _wl.setContentsMargins(9, 7, 9, 7)
+        _wl.setSpacing(1)
+
+        self._hud_weather_place = QLabel("LOC  --")
+        self._hud_weather_temp = QLabel("TEMP --")
+        self._hud_weather_cond = QLabel("WEATHER --")
+        self._hud_weather_meta = QLabel("HUM --  WIND --")
+        for _idx, _lbl in enumerate((
+            self._hud_weather_place,
+            self._hud_weather_temp,
+            self._hud_weather_cond,
+            self._hud_weather_meta,
+        )):
+            _lbl.setFont(
+                QFont(
+                    "Courier New",
+                    7,
+                    QFont.Weight.Bold if _idx < 2 else QFont.Weight.Normal,
+                )
+            )
+            _lbl.setStyleSheet(
+                f"color: {C.PRI if _idx == 0 else C.TEXT_MED}; "
+                "background: transparent; border: none;"
+            )
+            _lbl.setWordWrap(True)
+            _wl.addWidget(_lbl)
+
+        self._weather_hud.hide()
+
         self._tmr = QTimer(self)
         self._tmr.timeout.connect(self._step)
         self._tmr.start(16)
+
+    def set_weather(self, payload: dict) -> None:
+        """Update and show the compact weather card over the animated HUD."""
+        data = dict(payload or {})
+        place = str(data.get("location") or "Unknown").strip()
+        region = str(data.get("region") or "").strip()
+        if region:
+            place = f"{place}, {region}"
+        temp = data.get("temperature")
+        feels = data.get("feelslike")
+        cond = str(data.get("condition") or "Unknown").strip()
+        hum = data.get("humidity")
+        wind = data.get("wind_speed")
+
+        self._hud_weather_place.setText(f"LOC  {place[:28]}")
+        self._hud_weather_temp.setText(
+            f"TEMP {temp if temp not in (None, '') else '—'}°C  "
+            f"FEEL {feels if feels not in (None, '') else '—'}°"
+        )
+        self._hud_weather_cond.setText(cond[:31])
+        self._hud_weather_meta.setText(
+            f"HUM {hum if hum not in (None, '') else '—'}%  "
+            f"WIND {wind if wind not in (None, '') else '—'} km/h"
+        )
+        self._position_weather_hud()
+        self._weather_hud.show()
+        self._weather_hud.raise_()
+
+    def _position_weather_hud(self) -> None:
+        if not hasattr(self, "_weather_hud"):
+            return
+        width = min(255, max(205, int(self.width() * 0.34)))
+        height = 88
+        self._weather_hud.setGeometry(14, 14, width, height)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_weather_hud()
 
     def glance(self, dx: float, dy: float, hold: float = 1.1) -> None:
         """Ask the avatar to look somewhere for a moment (see HoloAvatar.glance)."""
@@ -3155,8 +3232,12 @@ class MainWindow(QMainWindow):
             """)
 
     def _show_weather(self, payload) -> None:
-        """Keep the compact Weatherstack snapshot visible beside the HUD."""
+        """Keep the Weatherstack snapshot visible on the HUD and side monitor."""
         data = dict(payload or {})
+        try:
+            self.hud.set_weather(data)
+        except Exception:
+            pass
         place = str(data.get("location") or "Unknown").strip()
         region = str(data.get("region") or "").strip()
         if region:
