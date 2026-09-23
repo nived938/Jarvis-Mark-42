@@ -163,14 +163,14 @@ def _feature_vector(samples: np.ndarray) -> np.ndarray | None:
 
     base = np.column_stack((centroid / 4000.0, bandwidth / 4000.0,
                             rolloff / 4000.0, zcr))
-    features = np.column_stack(
+    base_stats = np.concatenate(
         (np.mean(base, axis=0), np.std(base, axis=0))
     )
     band_stats = np.concatenate(
         (np.mean(band_features, axis=0), np.std(band_features, axis=0))
     )
 
-    vector = np.concatenate((features, band_stats)).astype(np.float32)
+    vector = np.concatenate((base_stats, band_stats)).astype(np.float32)
     vector -= float(np.mean(vector))
     norm = float(np.linalg.norm(vector))
     if norm < 1e-8:
@@ -239,7 +239,7 @@ def _finish_enrollment(name: str, chunks: list[np.ndarray]) -> None:
     global _CURRENT_IDENTITY, _CURRENT_SCORE, _LAST_IDENTIFIED_AT
     _CURRENT_IDENTITY = name
     _CURRENT_SCORE = 1.0
-    _LAST_IDENTIFIED_AT = time.time()
+    _LAST_IDENTIFIED_AT = time.monotonic()
     print(f"[VoiceAuth] Voice profile enrolled: {name}")
 
 
