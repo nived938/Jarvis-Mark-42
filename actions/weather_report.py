@@ -371,9 +371,9 @@ TOOL = {
     "description": (
         "Uses the Weatherstack API for weather. Never open a browser for weather. "
         "If city is omitted, detect the approximate location from the public IP "
-        "and query Weatherstack by IP. Shows a compact live weather card in the "
-        "JARVIS HUD and a detailed report in the HUD content panel. Supports current "
-        "or forecast/full reports when the Weatherstack subscription provides forecast data."
+        "and query Weatherstack by IP. Opens a temporary full-screen animated "
+        "weather HUD in the JARVIS center area. Supports current or forecast/full reports "
+        "when the Weatherstack subscription provides forecast data."
     ),
     "parameters": {
         "type": "OBJECT",
