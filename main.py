@@ -2042,6 +2042,8 @@ class JarvisLive:
 
             if not self.ui.muted and not self._phone_active:
                 data = indata.tobytes()
+                now = time.monotonic()
+                level = _pcm_level(indata)
 
                 # Stream microphone PCM continuously. Gemini 3.8 Live's
                 # automatic server VAD handles speech boundaries. A short
