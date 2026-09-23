@@ -28,9 +28,10 @@ from PyQt6.QtGui import (
     QPen, QPixmap, QRadialGradient, QShortcut,
 )
 from PyQt6.QtWidgets import (
-    QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplitter,
-    QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QProgressBar,
+    QApplication, QComboBox, QFileDialog, QFrame, QGraphicsOpacityEffect,
+    QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton,
+    QScrollArea, QSizePolicy, QSplitter, QStackedWidget, QTextEdit,
+    QVBoxLayout, QWidget, QProgressBar,
 )
 
 try:
@@ -441,45 +442,6 @@ class HudCanvas(QWidget):
         self._base_scale = 1.0    # slow "breathing" target; amp is added per-frame
         self._base_halo  = 55.0
 
-        # Compact live weather card over the HUD itself.
-        self._weather_hud = QFrame(self)
-        self._weather_hud.setStyleSheet(f"""
-            QFrame {{
-                background: rgba(0, 13, 20, 225);
-                border: 1px solid {C.BORDER_B};
-                border-radius: 7px;
-            }}
-        """)
-        _wl = QVBoxLayout(self._weather_hud)
-        _wl.setContentsMargins(9, 7, 9, 7)
-        _wl.setSpacing(1)
-
-        self._hud_weather_place = QLabel("LOC  --")
-        self._hud_weather_temp = QLabel("TEMP --")
-        self._hud_weather_cond = QLabel("WEATHER --")
-        self._hud_weather_meta = QLabel("HUM --  WIND --")
-        for _idx, _lbl in enumerate((
-            self._hud_weather_place,
-            self._hud_weather_temp,
-            self._hud_weather_cond,
-            self._hud_weather_meta,
-        )):
-            _lbl.setFont(
-                QFont(
-                    "Courier New",
-                    7,
-                    QFont.Weight.Bold if _idx < 2 else QFont.Weight.Normal,
-                )
-            )
-            _lbl.setStyleSheet(
-                f"color: {C.PRI if _idx == 0 else C.TEXT_MED}; "
-                "background: transparent; border: none;"
-            )
-            _lbl.setWordWrap(True)
-            _wl.addWidget(_lbl)
-
-        self._weather_hud.hide()
-
         self._tmr = QTimer(self)
         self._tmr.timeout.connect(self._step)
         self._tmr.start(16)
@@ -510,17 +472,6 @@ class HudCanvas(QWidget):
         self._position_weather_hud()
         self._weather_hud.show()
         self._weather_hud.raise_()
-
-    def _position_weather_hud(self) -> None:
-        if not hasattr(self, "_weather_hud"):
-            return
-        width = min(255, max(205, int(self.width() * 0.34)))
-        height = 88
-        self._weather_hud.setGeometry(14, 14, width, height)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._position_weather_hud()
 
     def glance(self, dx: float, dy: float, hold: float = 1.1) -> None:
         """Ask the avatar to look somewhere for a moment (see HoloAvatar.glance)."""
@@ -1442,6 +1393,350 @@ class _CameraPreview(QWidget):
         self.show()
         self.raise_()
         self._timer.start(6_000)   # auto-dismiss after 6 s
+
+
+
+class WeatherHudView(QWidget):
+    """Full HUD weather experience: animated, temporary, and camera-like."""
+
+    closed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"background: {C.BG};")
+        self._data: dict = {}
+        self._detail = ""
+        self._phase = 0.0
+        self._closing = False
+
+        self._fade = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self._fade)
+        self._fade.setOpacity(0.0)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 14, 18, 14)
+        root.setSpacing(10)
+
+        hdr = QHBoxLayout()
+        hdr.setSpacing(8)
+        self._title = QLabel("◈  WEATHER INTELLIGENCE")
+        self._title.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        self._title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        hdr.addWidget(self._title)
+
+        self._live = QLabel("● LIVE")
+        self._live.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._live.setStyleSheet(
+            f"color: {C.GREEN}; background: rgba(0,255,136,16); "
+            f"border: 1px solid {C.GREEN_D}; border-radius: 4px; padding: 2px 6px;"
+        )
+        hdr.addWidget(self._live)
+        hdr.addStretch()
+
+        self._source = QLabel("WEATHERSTACK • IP LOCATION")
+        self._source.setFont(QFont("Courier New", 7))
+        self._source.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        hdr.addWidget(self._source)
+
+        close = QPushButton("✕  CLOSE")
+        close.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setStyleSheet(f"""
+            QPushButton {{
+                color: {C.TEXT_DIM}; background: transparent;
+                border: 1px solid {C.BORDER}; border-radius: 4px;
+                padding: 4px 7px;
+            }}
+            QPushButton:hover {{
+                color: {C.PRI}; border-color: {C.PRI};
+                background: {C.PRI_GHO};
+            }}
+        """)
+        close.clicked.connect(self.close_view)
+        hdr.addWidget(close)
+        root.addLayout(hdr)
+
+        hero = QFrame()
+        hero.setStyleSheet(f"""
+            QFrame {{
+                background: rgba(1, 15, 24, 225);
+                border: 1px solid {C.BORDER_B};
+                border-radius: 10px;
+            }}
+        """)
+        hero_lay = QHBoxLayout(hero)
+        hero_lay.setContentsMargins(18, 14, 18, 14)
+        hero_lay.setSpacing(18)
+
+        self._icon = QLabel("☁")
+        self._icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._icon.setFont(QFont("Segoe UI Symbol", 42))
+        self._icon.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        self._icon.setFixedWidth(78)
+        hero_lay.addWidget(self._icon)
+
+        hero_text = QVBoxLayout()
+        hero_text.setSpacing(2)
+        self._place = QLabel("CURRENT LOCATION")
+        self._place.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
+        self._place.setStyleSheet(f"color: {C.WHITE}; background: transparent;")
+        self._place.setWordWrap(True)
+        hero_text.addWidget(self._place)
+
+        self._condition = QLabel("Awaiting weather data")
+        self._condition.setFont(QFont("Courier New", 8))
+        self._condition.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+        self._condition.setWordWrap(True)
+        hero_text.addWidget(self._condition)
+
+        self._time = QLabel("LOCAL TIME  --")
+        self._time.setFont(QFont("Courier New", 7))
+        self._time.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        hero_text.addWidget(self._time)
+        hero_text.addStretch()
+        hero_lay.addLayout(hero_text, 1)
+
+        self._temp = QLabel("--°")
+        self._temp.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._temp.setFont(QFont("Courier New", 32, QFont.Weight.Bold))
+        self._temp.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        self._temp.setMinimumWidth(150)
+        hero_lay.addWidget(self._temp)
+        root.addWidget(hero)
+
+        metrics = QGridLayout()
+        metrics.setHorizontalSpacing(8)
+        metrics.setVerticalSpacing(8)
+        self._metric_labels = {}
+        metric_defs = [
+            ("FEELS LIKE", "feelslike", "°C"),
+            ("HUMIDITY", "humidity", "%"),
+            ("WIND", "wind_speed", " km/h"),
+            ("PRESSURE", "pressure", " hPa"),
+            ("VISIBILITY", "visibility", " km"),
+            ("UV INDEX", "uv_index", ""),
+            ("CLOUD COVER", "cloudcover", "%"),
+            ("PRECIP", "precip", " mm"),
+        ]
+        for i, (label, key, suffix) in enumerate(metric_defs):
+            card = QFrame()
+            card.setStyleSheet(f"""
+                QFrame {{
+                    background: rgba(0, 11, 18, 220);
+                    border: 1px solid {C.BORDER};
+                    border-radius: 7px;
+                }}
+            """)
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(9, 7, 9, 7)
+            cl.setSpacing(2)
+            l1 = QLabel(label)
+            l1.setFont(QFont("Courier New", 6, QFont.Weight.Bold))
+            l1.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+            l2 = QLabel("—")
+            l2.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
+            l2.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+            cl.addWidget(l1)
+            cl.addWidget(l2)
+            self._metric_labels[key] = (l2, suffix)
+            metrics.addWidget(card, i // 4, i % 4)
+        root.addLayout(metrics)
+
+        detail_card = QFrame()
+        detail_card.setStyleSheet(f"""
+            QFrame {{
+                background: rgba(0, 13, 20, 205);
+                border: 1px solid {C.BORDER};
+                border-radius: 8px;
+            }}
+        """)
+        dl = QVBoxLayout(detail_card)
+        dl.setContentsMargins(10, 8, 10, 8)
+        dl.setSpacing(3)
+
+        self._detail_title = QLabel("DETAILS")
+        self._detail_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._detail_title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        dl.addWidget(self._detail_title)
+
+        self._detail_lbl = QLabel("Live weather data will appear here.")
+        self._detail_lbl.setFont(QFont("Courier New", 7))
+        self._detail_lbl.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+        self._detail_lbl.setWordWrap(True)
+        self._detail_lbl.setMaximumHeight(72)
+        dl.addWidget(self._detail_lbl)
+        root.addWidget(detail_card)
+
+        status = QHBoxLayout()
+        self._status = QLabel("WEATHER HUD • READY")
+        self._status.setFont(QFont("Courier New", 6, QFont.Weight.Bold))
+        self._status.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        status.addWidget(self._status)
+        status.addStretch()
+
+        hint = QLabel("Say “close weather” to return to JARVIS")
+        hint.setFont(QFont("Courier New", 6))
+        hint.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        status.addWidget(hint)
+        root.addLayout(status)
+
+        self._anim = QPropertyAnimation(self._fade, b"opacity", self)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        self._tmr = QTimer(self)
+        self._tmr.timeout.connect(self._tick)
+        self._tmr.start(33)
+
+    @staticmethod
+    def _weather_symbol(condition: str) -> str:
+        c = (condition or "").lower()
+        if any(x in c for x in ("thunder", "storm", "lightning")):
+            return "⚡"
+        if any(x in c for x in ("snow", "sleet", "ice", "blizzard")):
+            return "❄"
+        if any(x in c for x in ("rain", "drizzle", "shower")):
+            return "☂"
+        if any(x in c for x in ("sunny", "clear")):
+            return "☀"
+        if any(x in c for x in ("cloud", "overcast", "mist", "fog")):
+            return "☁"
+        return "◌"
+
+    @staticmethod
+    def _num(value, suffix="—") -> str:
+        if value in (None, ""):
+            return "—"
+        try:
+            return f"{float(value):g}{suffix}"
+        except (TypeError, ValueError):
+            return f"{value}{suffix}"
+
+    def set_weather(self, payload: dict) -> None:
+        data = dict(payload or {})
+        self._data = data
+        self._detail = str(data.get("hud_detail") or "").strip()
+
+        place = ", ".join(
+            x for x in (
+                str(data.get("location") or "").strip(),
+                str(data.get("region") or "").strip(),
+                str(data.get("country") or "").strip(),
+            ) if x
+        ) or "Current Location"
+
+        cond = str(data.get("condition") or "Weather unavailable").strip()
+        self._place.setText(place[:72])
+        self._condition.setText(cond[:96])
+        self._temp.setText(self._num(data.get("temperature"), "°"))
+        self._icon.setText(self._weather_symbol(cond))
+        self._time.setText("LOCAL TIME  " + str(data.get("local_time") or "—"))
+
+        for key, (label, suffix) in self._metric_labels.items():
+            label.setText(self._num(data.get(key), suffix))
+
+        detail = self._detail or (
+            f"Condition: {cond}  •  "
+            f"Feels like: {self._num(data.get('feelslike'), '°C')}  •  "
+            f"Wind: {self._num(data.get('wind_speed'), ' km/h')}"
+        )
+        detail_lines = [ln.strip() for ln in detail.splitlines() if ln.strip()]
+        self._detail_lbl.setText("\n".join(detail_lines[:5])[:700])
+        self._status.setText(
+            "WEATHER HUD • LIVE • "
+            + (str(data.get("observation_time") or "UPDATED").upper())
+        )
+
+    def open_view(self) -> None:
+        self._closing = False
+        self._anim.stop()
+        self._fade.setOpacity(0.0)
+        self.show()
+        self.raise_()
+        self._anim.setDuration(420)
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(1.0)
+        try:
+            self._anim.finished.disconnect()
+        except Exception:
+            pass
+        self._anim.start()
+
+    def close_view(self) -> None:
+        if self._closing or not self.isVisible():
+            return
+        self._closing = True
+        self._anim.stop()
+        self._anim.setDuration(260)
+        self._anim.setStartValue(float(self._fade.opacity()))
+        self._anim.setEndValue(0.0)
+        try:
+            self._anim.finished.disconnect()
+        except Exception:
+            pass
+        self._anim.finished.connect(self._finish_close)
+        self._anim.start()
+
+    def _finish_close(self) -> None:
+        self.hide()
+        self._fade.setOpacity(0.0)
+        self._closing = False
+        self.closed.emit()
+
+    def _tick(self) -> None:
+        self._phase = (self._phase + 0.025) % 1000.0
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        if not p.isActive():
+            return
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.fillRect(self.rect(), qcol(C.BG))
+
+        W, H = self.width(), self.height()
+        cx, cy = W * 0.50, H * 0.50
+        t = self._phase
+
+        step = 42
+        drift = int((t * 9) % step)
+        p.setPen(QPen(qcol(C.PRI_GHO, 120), 1))
+        for x in range(-step, W + step, step):
+            p.drawLine(x + drift, 0, x + drift, H)
+        for y in range(-step, H + step, step):
+            p.drawLine(0, y + drift // 2, W, y + drift // 2)
+
+        rg = QRadialGradient(cx, cy, max(W, H) * 0.55)
+        rg.setColorAt(0.00, qcol(C.PRI, 24))
+        rg.setColorAt(0.35, qcol(C.PRI, 10))
+        rg.setColorAt(1.00, qcol(C.BG, 0))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(rg))
+        p.drawEllipse(QRectF(cx - W * 0.48, cy - H * 0.62, W * 0.96, H * 1.24))
+
+        radius = min(W, H) * 0.44
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        for n, alpha in ((1.0, 36), (0.82, 28), (0.64, 22)):
+            rr = radius * n
+            p.setPen(QPen(qcol(C.PRI, alpha), 1.0))
+            p.drawEllipse(QRectF(cx - rr, cy - rr, rr * 2, rr * 2))
+
+        sweep = (t * 65) % 360
+        p.setPen(QPen(qcol(C.PRI, 55), 1.5))
+        p.drawArc(
+            QRectF(cx - radius, cy - radius, radius * 2, radius * 2),
+            int(sweep * 16), 46 * 16,
+        )
+
+        pulse = 0.5 + 0.5 * math.sin(t * 2.2)
+        m, a = 18, int(70 + pulse * 60)
+        p.setPen(QPen(qcol(C.PRI, a), 1.5))
+        for sx, sy in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+            x = W - m if sx > 0 else m
+            y = H - m if sy > 0 else m
+            arm = 22 + 5 * pulse
+            p.drawLine(QLineF(x, y, x - sx * arm, y))
+            p.drawLine(QLineF(x, y, x, y - sy * arm))
 
 
 class SetupOverlay(QWidget):
@@ -2997,7 +3292,8 @@ class MainWindow(QMainWindow):
     _log_sig        = pyqtSignal(str)
     _state_sig      = pyqtSignal(str)
     _content_sig    = pyqtSignal(str, str)   # (title, text) — thread-safe content display
-    _weather_sig     = pyqtSignal(object)     # compact live weather payload
+    _weather_sig     = pyqtSignal(object)     # full weather HUD payload
+    _weather_close_sig = pyqtSignal()            # close weather HUD from any thread
     _emergency_sig    = pyqtSignal(bool)        # emergency latch → Qt thread
     _reconfig_sig   = pyqtSignal()           # trigger setup overlay from any thread
     _camera_sig     = pyqtSignal(bytes)      # show camera frame preview (small overlay)
@@ -3112,10 +3408,13 @@ class MainWindow(QMainWindow):
         )
         _cam_v.addWidget(self._cam_live_lbl, stretch=1)
 
-        # Stack: 0 = animated HUD, 1 = live camera
+        # Stack: 0 = animated HUD, 1 = live camera, 2 = full weather HUD
+        self._weather_view = WeatherHudView()
+        self._weather_view.closed.connect(self._on_weather_closed)
         self._hud_cam_stack = QStackedWidget()
         self._hud_cam_stack.addWidget(self.hud)
         self._hud_cam_stack.addWidget(_cam_cont)
+        self._hud_cam_stack.addWidget(self._weather_view)
 
         self._center_split = QSplitter(Qt.Orientation.Vertical)
         self._center_split.setStyleSheet(f"""
@@ -3162,6 +3461,7 @@ class MainWindow(QMainWindow):
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
         self._weather_sig.connect(self._show_weather)
+        self._weather_close_sig.connect(self._close_weather_now)
         self._emergency_sig.connect(self.set_emergency_active)
         self._reconfig_sig.connect(self._show_setup)
         self._camera_sig.connect(self._show_camera_frame)
@@ -3232,32 +3532,47 @@ class MainWindow(QMainWindow):
             """)
 
     def _show_weather(self, payload) -> None:
-        """Keep the Weatherstack snapshot visible on the HUD and side monitor."""
+        """Show weather as a temporary full weather HUD, like live camera."""
         data = dict(payload or {})
         try:
-            self.hud.set_weather(data)
+            self._cam_stop.set()
         except Exception:
             pass
-        place = str(data.get("location") or "Unknown").strip()
-        region = str(data.get("region") or "").strip()
-        if region:
-            place = f"{place}, {region}"
-        temp = data.get("temperature")
-        feels = data.get("feelslike")
-        cond = str(data.get("condition") or "Unknown").strip()
-        hum = data.get("humidity")
-        wind = data.get("wind_speed")
+        self._weather_view.set_weather(data)
+        self._hud_cam_stack.setCurrentIndex(2)
+        self._weather_view.open_view()
 
-        self._weather_place_lbl.setText(f"LOC  {place[:24]}")
-        self._weather_temp_lbl.setText(
-            f"TEMP {temp if temp not in (None, '') else '—'}°C  "
-            f"FEEL {feels if feels not in (None, '') else '—'}°"
-        )
-        self._weather_cond_lbl.setText(cond[:28])
-        self._weather_meta_lbl.setText(
-            f"HUM {hum if hum not in (None, '') else '—'}%  "
-            f"WIND {wind if wind not in (None, '') else '—'} km/h"
-        )
+    def _on_weather_closed(self) -> None:
+        self._hud_cam_stack.setCurrentIndex(0)
+
+    def _close_weather_now(self) -> None:
+        try:
+            if self._weather_view.isVisible() and self._hud_cam_stack.currentIndex() == 2:
+                self._weather_view.close_view()
+            else:
+                self._hud_cam_stack.setCurrentIndex(0)
+        except Exception:
+            self._hud_cam_stack.setCurrentIndex(0)
+
+    def start_weather_view(self, payload: dict) -> None:
+        """Thread-safe entry point: show the animated weather HUD."""
+        try:
+            self._weather_sig.emit(dict(payload or {}))
+        except Exception:
+            pass
+
+    def stop_weather_view(self) -> None:
+        """Thread-safe entry point: close the animated weather HUD."""
+        try:
+            self._weather_close_sig.emit()
+        except Exception:
+            pass
+
+    def is_weather_hud_open(self) -> bool:
+        try:
+            return self._hud_cam_stack.currentIndex() == 2 and self._weather_view.isVisible()
+        except Exception:
+            return False
 
     def _show_camera_frame(self, img_bytes: bytes):
         """Slot — display camera preview overlay (main thread)."""
@@ -3912,37 +4227,6 @@ class MainWindow(QMainWindow):
         ip_lay.addWidget(os_lbl)
 
         lay.addWidget(info_panel)
-        lay.addSpacing(4)
-
-        weather_panel = QWidget()
-        weather_panel.setStyleSheet(
-            f"background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 4px;"
-        )
-        weather_lay = QVBoxLayout(weather_panel)
-        weather_lay.setContentsMargins(6, 5, 6, 5)
-        weather_lay.setSpacing(2)
-
-        self._weather_place_lbl = QLabel("LOC  --")
-        self._weather_temp_lbl = QLabel("TEMP --")
-        self._weather_cond_lbl = QLabel("WEATHER --")
-        self._weather_meta_lbl = QLabel("HUM --  WIND --")
-
-        for idx, lbl in enumerate((
-            self._weather_place_lbl, self._weather_temp_lbl,
-            self._weather_cond_lbl, self._weather_meta_lbl
-        )):
-            lbl.setFont(
-                QFont("Courier New", 7,
-                      QFont.Weight.Bold if idx < 2 else QFont.Weight.Normal)
-            )
-            lbl.setStyleSheet(
-                f"color: {C.PRI if idx == 0 else C.TEXT_MED}; "
-                "background: transparent; border: none;"
-            )
-            lbl.setWordWrap(True)
-            weather_lay.addWidget(lbl)
-
-        lay.addWidget(weather_panel)
         lay.addSpacing(4)
 
         lay.addStretch()
@@ -5585,11 +5869,24 @@ class JarvisUI:
         self._win._content_sig.emit(title[:48], text[:4000])
 
     def show_weather(self, payload: dict) -> None:
-        """Thread-safe: update the persistent weather card beside the HUD."""
+        """Thread-safe: show the temporary full weather HUD."""
         try:
             self._win._weather_sig.emit(dict(payload or {}))
         except Exception:
             pass
+
+    def stop_weather_view(self) -> None:
+        """Thread-safe: close the temporary weather HUD."""
+        try:
+            self._win._weather_close_sig.emit()
+        except Exception:
+            pass
+
+    def is_weather_hud_open(self) -> bool:
+        try:
+            return bool(self._win.is_weather_hud_open())
+        except Exception:
+            return False
 
     def set_emergency_active(self, active: bool) -> None:
         """Thread-safe: reflect the emergency-stop latch in the HUD."""
