@@ -3589,15 +3589,6 @@ class MainWindow(QMainWindow):
     def privacy_shield_active(self) -> bool:
         return bool(self._privacy_shield_active)
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        try:
-            if hasattr(self, "_privacy_shield") and self._privacy_shield_active:
-                self._privacy_shield.setGeometry(self.centralWidget().rect())
-                self._privacy_shield.raise_()
-        except Exception:
-            pass
-
     def _show_camera_frame(self, img_bytes: bytes):
         """Slot — display camera preview overlay (main thread)."""
         self._cam_preview.show_frame(img_bytes)
@@ -4030,6 +4021,12 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         cw = self.centralWidget()
+        if getattr(self, "_privacy_shield_active", False):
+            try:
+                self._privacy_shield.setGeometry(cw.rect())
+                self._privacy_shield.raise_()
+            except Exception:
+                pass
         if self._overlay and self._overlay.isVisible():
             ow, oh = 460, 390
             self._overlay.setGeometry(
