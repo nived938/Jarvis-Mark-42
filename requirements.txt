@@ -47,6 +47,7 @@ qrcode[pil]>=7,<9
 # ── Plugin extras: Gmail / Google Calendar (OAuth) ────────────────────────────
 google-api-python-client
 google-auth-oauthlib
+mediapipe>=0.10.33,<1
 
 # ── Plugin extras: Tuya / Smart Life smart light (home_assistant) ─────────────
 tinytuya
