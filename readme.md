@@ -31,6 +31,18 @@ Mark 43 expands the existing architecture without renaming the original modules.
 This feature expansion also adds speaker identity profiles, a personal activity timeline, goal/OKR tracking, a workflow recorder, a local notification inbox, JARVIS Focus Mode, clipboard history, a read-only JARVIS Doctor, per-application Windows audio control, software update management, connected-device inventory, and an idle-time file path index for fast file discovery/opening.
 It also adds a persistent stopwatch and a Windows Settings controller with broad Settings-page navigation, Wi-Fi/Bluetooth controls, and supported direct user-level settings changes.
 The new Mark 43 safety layer adds a fail-closed Emergency Kill Switch and guarded JARVIS Self-Modification. Emergency mode blocks new JARVIS-controlled actions and speech until explicitly released. Self-modification validates generated source, stages the proposal, and requires a human confirmation on the HUD before changing JARVIS source; approved edits are backed up and undoable. Existing filenames are preserved; these are additional modules and targeted edits.
+### New Mark 43 desktop integrations
+The branch now includes application crash watching, USB/device monitoring, download completion watching,
+hand-gesture recognition, short local audio-event classification, screen-change monitoring, global context
+actions, privacy shielding, per-application internet locking, temporary guest sessions, named desktop scenes,
+camera document scanning, a no-progress tool guard, and local execution traces.
+
+It also includes gmail_manager.py and calender_manager.py using Google's official Gmail and Calendar APIs
+with desktop OAuth. Gmail can surface recent mail and detect likely verification/OTP/security codes; Calendar
+can read and manage events. Google documents desktop OAuth client setup and current API quotas here:
+https://developers.google.com/workspace/gmail/api/quickstart/python
+https://developers.google.com/workspace/calendar/api/auth
+
 Weather no longer opens Google/browser search. weather_report calls Weatherstack and opens the temporary animated weather HUD on request; richer current/forecast data is shown inside that HUD.
 
 The existing filenames are preserved. New capabilities are implemented as additional `actions/*.py` modules plus targeted edits to `main.py`, `core/prompt.txt`, and `ui.py`.
