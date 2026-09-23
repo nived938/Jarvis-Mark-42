@@ -32,7 +32,7 @@ This feature expansion also adds speaker identity profiles, a personal activity 
 It also adds a persistent stopwatch and a Windows Settings controller with broad Settings-page navigation, Wi-Fi/Bluetooth controls, and supported direct user-level settings changes.
 The new Mark 43 safety layer adds a fail-closed Emergency Kill Switch and guarded JARVIS Self-Modification. Emergency mode blocks new JARVIS-controlled actions and speech until explicitly released. Self-modification validates generated source, stages the proposal, and requires a human confirmation on the HUD before changing JARVIS source; approved edits are backed up and undoable. Existing filenames are preserved; these are additional modules and targeted edits.
 ### New Mark 43 desktop integrations
-The branch now includes application crash watching, USB/device monitoring, download completion watching,
+The desktop integrations also include `app_screen_manager.py` for true borderless fullscreen, focus/maximize/minimize/restore/close, and dual-monitor window movement (including automatic movement to the other monitor).\nThe branch now includes application crash watching, USB/device monitoring, download completion watching,
 hand-gesture recognition, short local audio-event classification, screen-change monitoring, global context
 actions, privacy shielding, per-application internet locking, named desktop scenes,
 camera document scanning, a no-progress tool guard, and local execution traces.
