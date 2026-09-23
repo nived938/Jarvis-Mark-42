@@ -1509,6 +1509,18 @@ class JarvisLive:
         _all_decls = (TOOL_DECLARATIONS
                       + self._action_registry.get_tool_declarations()
                       + self._plugin_registry.get_tool_declarations())
+
+        # Gemini 3.8 Live defaults function calls to asynchronous NON_BLOCKING
+        # execution. JARVIS currently has a synchronous tool-response loop, so
+        # explicitly mark every declaration as BLOCKING until the execution
+        # pipeline is migrated to the new async scheduling protocol.
+        _normalized_decls = []
+        for _decl in _all_decls:
+            if isinstance(_decl, dict):
+                _decl = dict(_decl)
+                _decl.setdefault("behavior", "BLOCKING")
+            _normalized_decls.append(_decl)
+        _all_decls = _normalized_decls
         _names = {(d.get("name") if isinstance(d, dict) else getattr(d, "name", ""))
                   for d in _all_decls}
         sys_prompt = _render_prompt(sys_prompt, {
@@ -1610,15 +1622,8 @@ class JarvisLive:
                 "high":   types.MediaResolution.MEDIA_RESOLUTION_HIGH,
             }[res]
 
-        # Thinking is left at the server default deliberately. Forcing the budget
-        # to zero was measured on gemini-3.1-flash-live over interleaved trials
-        # and did not make the first word arrive sooner — this model does not
-        # appear to deliberate on the Live path, so pinning the field only adds a
-        # way for a future release to behave differently. Set "thinking_enabled"
-        # in config/api_keys.json to true to let it reason instead.
-        if get_thinking_enabled():
-            out["thinking_config"] = types.ThinkingConfig(thinking_budget=-1)
-
+        # Gemini 3.8 Live does not accept thinking_config. It uses its own
+        # fixed low-latency interleaved reasoning profile.
         return out
 
     async def _execute_tool(self, fc) -> types.FunctionResponse:
