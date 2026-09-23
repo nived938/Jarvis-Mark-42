@@ -1163,6 +1163,70 @@ class JarvisLive:
             self.ui.write_log("SYS: Camera HUD closed.")
             return True
 
+        # Windows app/window controls: keep common screen-management commands
+        # local so they are immediate and do not require a Gemini tool-call round trip.
+        app_match = _re.match(
+            r"^(?:fullscreen|full screen|maximize|maximise|"
+            r"minimize|minimise|restore|close|focus|open)\s+(.+)$",
+            raw,
+            _re.IGNORECASE,
+        )
+        if app_match:
+            verb = low.split(None, 1)[0]
+            app_name = app_match.group(1).strip()
+            if verb == "full" and low.startswith("full screen "):
+                verb = "fullscreen"
+            action = {
+                "fullscreen": "fullscreen",
+                "maximize": "maximize",
+                "maximise": "maximize",
+                "minimize": "minimize",
+                "minimise": "minimize",
+                "restore": "restore",
+                "close": "close",
+                "focus": "focus",
+            }.get(verb)
+            if action and app_name:
+                result = self._run_local_action(
+                    "app_screen_manager",
+                    {"action": action, "app": app_name},
+                )
+                self.ui.write_log("SYS: " + str(result))
+                return True
+
+        move_match = _re.match(
+            r"^(?:move|send)\s+(.+?)\s+to\s+(?:monitor|screen|display)\s+(\d+)$",
+            raw,
+            _re.IGNORECASE,
+        )
+        if move_match:
+            app_name = move_match.group(1).strip()
+            monitor = int(move_match.group(2))
+            result = self._run_local_action(
+                "app_screen_manager",
+                {
+                    "action": "move_to_monitor",
+                    "app": app_name,
+                    "monitor": monitor,
+                },
+            )
+            self.ui.write_log("SYS: " + str(result))
+            return True
+
+        if low in (
+            "list open apps",
+            "list application windows",
+            "show open app windows",
+            "show open windows",
+            "what apps are open",
+        ):
+            result = self._run_local_action(
+                "app_screen_manager",
+                {"action": "list"},
+            )
+            self.ui.write_log("SYS: " + str(result))
+            return True
+
         # Weather is a direct local API action — never route weather requests
         # through browser search or generic web_search.
         if (
