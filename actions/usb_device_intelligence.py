@@ -95,9 +95,13 @@ def _snapshot():
                     groups[key] = candidate
 
         # An unexpectedly tiny snapshot during device enumeration is also treated
-        # as a transient failure rather than a real mass disconnect.
+        # as a transient failure rather than a real mass disconnect. This prevents
+        # a temporary PnP query hiccup from becoming dozens of fake disconnects.
         result = sorted(groups.values(), key=lambda x: x[0])
-        if _state["snapshot"] and not result:
+        previous_count = len(_state["snapshot"])
+        if previous_count and (
+            not result or len(result) < max(2, int(previous_count * 0.5))
+        ):
             return None
         return result[:500]
 
