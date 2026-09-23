@@ -734,6 +734,8 @@ class JarvisLive:
         self._client_last_voice = 0.0
         self._client_vad_end_sent = False
         self._client_preroll = deque(maxlen=4)  # ~160 ms at 40 ms blocks
+        self._client_turn_started = 0.0
+        self._client_first_audio_logged = False
 
         self._enhanced_live = True  # current Live model; kept for API-version fallback handling
         self._tuned_live    = True  # turn-taking / media / thinking knobs; same fallback
@@ -2042,8 +2044,6 @@ class JarvisLive:
 
             if not self.ui.muted and not self._phone_active:
                 data = indata.tobytes()
-                now = time.monotonic()
-                level = _pcm_level(indata)
 
                 # Local speech gate + hybrid finalization.
                 #
@@ -2066,6 +2066,8 @@ class JarvisLive:
 
                     self._client_speech_active = True
                     self._client_last_voice = now
+                    self._client_turn_started = now
+                    self._client_first_audio_logged = False
                     self._client_vad_end_sent = False
 
                     for buffered in self._client_preroll:
@@ -2093,6 +2095,8 @@ class JarvisLive:
                         {"audio_stream_end": True}
                     )
                     self._client_preroll.clear()
+                    self._client_turn_started = 0.0
+                    self._client_first_audio_logged = False
 
                 # Feed the live mic level to the HUD so the waveform reacts to
                 # the user's actual voice while listening. Purely cosmetic — any
@@ -2211,6 +2215,13 @@ class JarvisLive:
                             self._resume_handle = _sru.new_handle
 
                     if response.data:
+                        if (
+                            not self._client_first_audio_logged
+                            and self._client_turn_started > 0.0
+                        ):
+                            _lat = time.monotonic() - self._client_turn_started
+                            print(f"[LATENCY] First model audio: {_lat:.2f}s")
+                            self._client_first_audio_logged = True
                         if self._interrupted:
                             pass  # discard: interrupted
                         else:
@@ -2277,6 +2288,7 @@ class JarvisLive:
                                     }))
                             self._current_turn_text = full_in
                             in_buf = []
+                            self._client_turn_started = 0.0
 
                             full_out = " ".join(out_buf).strip()
                             # Second line of defence: even if a repeat slips
