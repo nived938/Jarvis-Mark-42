@@ -60,7 +60,7 @@ def _snapshot():
 
                 # Only report physical USB devices. Windows otherwise exposes
                 # software devices and dozens of Bluetooth/audio child nodes.
-                if not instance_id.upper().startswith("USB\"):
+                if not instance_id.upper().startswith("USB\\"):
                     continue
                 if cls in _IGNORED_CLASSES or friendly in _IGNORED_FRIENDLY:
                     continue
