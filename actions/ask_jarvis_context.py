@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import platform
+from pathlib import Path
 
 def _install_windows_context_menu():
     if platform.system() != "Windows":
@@ -41,8 +42,8 @@ def _install_windows_context_menu():
         # empty default value; merely creating the key is not sufficient on all
         # current Windows 11 builds.
         classic = (
-            r"Software\Classes\CLSID\"
-            r"{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
+            r"Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}"
+            r"\InprocServer32"
         )
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, classic) as key:
             winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "")
