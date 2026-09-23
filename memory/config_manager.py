@@ -172,17 +172,11 @@ def save_thinking_enabled(enabled: bool) -> None:
 def get_turn_tuning() -> dict:
     """How eagerly the server decides you have stopped speaking.
 
-    OFF by default, and that default was earned. Cutting turns shorter looks
-    like a free speed win and is not: proactive audio has to judge whether an
-    utterance was even addressed to the assistant, and a turn clipped early
-    gives it less to judge, so it stays quiet — and the reply to your first
-    sentence only arrives once your second one has given it enough context.
-    That reads as the assistant being a turn behind, which is far worse than
-    the fraction of a second the tuning saves.
+    Enabled by default with a 600 ms silence window to keep voice responses
+    responsive while still tolerating normal pauses.
 
-    Turn it on with "turn_tuning": {"enabled": true} if your own microphone and
-    speaking pace suit it. `silence_ms` is the one that is felt: the pause the
-    server sits through before accepting your turn is over.
+    Set "turn_tuning": {"enabled": false} to restore the server defaults.
+    "silence_ms" is the main latency control.
     """
     cfg = load_api_keys().get("turn_tuning")
     cfg = cfg if isinstance(cfg, dict) else {}
@@ -219,14 +213,10 @@ def save_turn_tuning(values: dict) -> None:
 
 
 def get_proactive_audio_enabled() -> bool:
-    """Whether the model gets to decide an utterance was not aimed at it and
-    stay quiet.
+    """Off by default for lower response latency.
 
-    On by default — it is what stops the assistant answering the room. But it
-    is also the first thing to switch off if replies ever seem to arrive a turn
-    late: what looks like lag is usually the model having judged your previous
-    sentence as not addressed to it, and only changing its mind once the next
-    one arrives.
+    Set "proactive_audio": true when filtering background speech is more
+    important than faster responses.
     """
     return bool(load_api_keys().get("proactive_audio", False))
 
