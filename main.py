@@ -2441,11 +2441,10 @@ class JarvisLive:
     # ── Morning briefing ────────────────────────────────────────────────────────
 
     async def _send_startup_briefing(self) -> None:
-        """Send one fast greeting and load news in the background.
+        """Send only the startup greeting.
 
-        The greeting is the only Gemini generation. News is fetched separately
-        and shown on the UI when ready, so startup can never queue a second model
-        turn behind the user's first request.
+        News is intentionally not fetched or spoken during startup. This keeps
+        the first user interaction completely independent of background news work.
         """
         memory = load_memory()
         identity = memory.get("identity", {})
@@ -2458,12 +2457,9 @@ class JarvisLive:
         name = _val("name")
         time_str = datetime.now().strftime("%H:%M")
 
-        loop = asyncio.get_event_loop()
-        news_future = loop.run_in_executor(None, _fetch_news_sync, "top world news today")
-
         lang_clause = (
-            f" Speak this greeting in {lang}, then follow the user's own language from "
-            "their first reply onward."
+            f" Speak this greeting in {lang}, then follow the user's own language "
+            "from their first reply onward."
             if lang else ""
         )
         name_clause = f" Address the user as {name}." if name else ""
@@ -2484,41 +2480,19 @@ class JarvisLive:
         if not self.session:
             return
 
-        p1 = (
-            f"Greet the user warmly, mention it is {time_str}, and say you are fetching "
-            f"today's news now.{session_clause} Keep it to 2 short sentences max. "
-            f"Do not call tools.{lang_clause}{name_clause}"
+        prompt = (
+            f"Greet the user warmly and mention it is {time_str}.{session_clause} "
+            f"Keep it to 2 short sentences maximum. Do not mention news and do not "
+            f"call tools.{lang_clause}{name_clause}"
         )
-
         try:
             await self.session.send_client_content(
-                turns={"role": "user", "parts": [{"text": p1}]},
+                turns={"role": "user", "parts": [{"text": prompt}]},
                 turn_complete=True,
             )
             print("[JARVIS] Briefing greeting sent.")
         except Exception as exc:
             print(f"[Briefing] Greeting failed: {exc}")
-            return
-
-        async def _populate_news():
-            try:
-                news_text = await asyncio.wait_for(
-                    asyncio.wrap_future(news_future),
-                    timeout=5.0,
-                )
-                if not news_text:
-                    return
-                failed = news_text.startswith(
-                    ("No news found", "Search failed", "Please provide")
-                )
-                if failed:
-                    return
-                self.ui.show_content("NEWS — top world news today", news_text)
-                self.ui.write_log("SYS: Today's news is ready on the screen.")
-            except Exception as exc:
-                print(f"[Briefing] Background news failed: {exc}")
-
-        asyncio.create_task(_populate_news())
 
     # ── Session memory ──────────────────────────────────────────────────────────
 
