@@ -7,6 +7,7 @@ close, listing windows, and moving an application window between monitors.
 from __future__ import annotations
 
 import ctypes
+from ctypes import wintypes
 import json
 import platform
 from dataclasses import dataclass
@@ -247,7 +248,7 @@ def _focus(hwnd: int) -> None:
 
 
 def _window_rect(hwnd: int) -> tuple[int, int, int, int]:
-    rect = ctypes.wintypes.RECT()
+    rect = wintypes.RECT()
     if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
         raise RuntimeError("Could not read application window position.")
     return rect.left, rect.top, rect.right, rect.bottom
