@@ -44,6 +44,7 @@ WS_EX_STATICEDGE = 0x00020000
 SWP_NOSENDCHANGING = 0x0400
 SWP_SHOWWINDOW = 0x0040
 SWP_NOOWNERZORDER = 0x0200
+SWP_FRAMECHANGED = 0x0020
 
 MONITOR_DEFAULTTONEAREST = 2
 MONITORINFOF_PRIMARY = 1
@@ -276,7 +277,7 @@ def _place(hwnd: int, left: int, top: int, width: int, height: int) -> None:
         int(top),
         int(width),
         int(height),
-        SWP_NOOWNERZORDER | SWP_NOSENDCHANGING | SWP_SHOWWINDOW,
+        SWP_NOOWNERZORDER | SWP_NOSENDCHANGING | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
     )
 
 
@@ -452,7 +453,26 @@ def _handler(parameters, player=None, **_):
         user32.PostMessageW(window.hwnd, 0x0010, 0, 0)  # WM_CLOSE
         return f'Close requested for "{window.title}".'
 
-    if action in {"move", "move_to_monitor"}:
+    if action in {"move", "move_to_monitor", "move_next_monitor"}:
+        if action == "move_next_monitor":
+            monitors = _monitor_rects()
+            if len(monitors) < 2:
+                return "I detected fewer than two monitors."
+            current_handle = user32.MonitorFromWindow(
+                window.hwnd,
+                MONITOR_DEFAULTTONEAREST,
+            )
+            current_index = next(
+                (
+                    index
+                    for index, item in enumerate(monitors)
+                    if item["handle"] == int(current_handle)
+                ),
+                0,
+            )
+            target_monitor = (current_index + 1) % len(monitors) + 1
+            return _move_to_monitor(window, target_monitor)
+
         try:
             monitor = int(parameters.get("monitor", 0))
         except (TypeError, ValueError):
@@ -472,7 +492,7 @@ TOOL = {
     "description": (
         "Control visible Windows app windows and dual-monitor placement. "
         "Actions: focus, fullscreen, restore/unfullscreen, maximize, minimize, "
-        "close, move_to_monitor, list. IMPORTANT: fullscreen first focuses the "
+        "close, move_to_monitor, move_next_monitor, list. IMPORTANT: fullscreen first focuses the "
         "requested app, saves its original window style and position, then makes "
         "it true borderless fullscreen on the requested monitor. "
         "For 'fullscreen JARVIS app', use app='Jarvis' and action='fullscreen'. "
