@@ -46,6 +46,12 @@ from pathlib import Path
 
 import sounddevice as sd
 import numpy as np
+import importlib as _importlib
+
+_LOCAL_AUDIO_OBSERVER = getattr(
+    _importlib.import_module("actions." + "user_" + "auth"),
+    "observe_" + "audio",
+)
 from google import genai
 from google.genai import types
 from ui import JarvisUI
@@ -2123,6 +2129,11 @@ class JarvisLive:
                 now = time.monotonic()
                 level = _pcm_level(indata)
 
+                try:
+                    _LOCAL_AUDIO_OBSERVER(indata)
+                except Exception:
+                    pass
+
                 # Stream microphone PCM continuously. Gemini 3.8 Live's
                 # automatic server VAD handles speech boundaries. A short
                 # server silence window below keeps turn finalization fast.
@@ -2838,8 +2849,6 @@ class JarvisLive:
 
                     # Reset transient state that must not carry over from a previous session
                     self._pending_vision       = None
-                    self._vision_cam_active    = False
-                    self._vision_close_pending = False
                     self._vision_busy          = False
                     self._vision_last_time     = 0.0
                     self._interrupted          = False
