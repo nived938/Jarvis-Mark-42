@@ -112,7 +112,7 @@ def get_base_dir():
 BASE_DIR        = get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 PROMPT_PATH     = BASE_DIR / "core" / "prompt.txt"
-LIVE_MODEL          = "models/gemini-3.1-flash-live-preview"
+LIVE_MODEL          = "models/gemini-3.8-live"
 CHANNELS            = 1
 SEND_SAMPLE_RATE    = 16000 
 RECEIVE_SAMPLE_RATE = 24000
@@ -726,7 +726,7 @@ class JarvisLive:
         self._no_progress = NoProgressGuard(repeat_limit=3)
         self._trace_id = trace_start_session()
 
-        self._enhanced_live = True  # proactive audio; auto-disabled if the server rejects it
+        self._enhanced_live = True  # current Live model; kept for API-version fallback handling
         self._tuned_live    = True  # turn-taking / media / thinking knobs; same fallback
 
         _base_dir = Path(__file__).resolve().parent
@@ -2796,9 +2796,7 @@ class JarvisLive:
                 _resumed_with = self._resume_handle is not None
                 config = self._build_config()
 
-                # Fresh client on every reconnect — avoids stale HTTP session state
-                # v1alpha carries proactive audio; if it gets rejected we fall
-                # back to v1beta.
+                # Fresh client on every reconnect — avoids stale HTTP session state.
                 client = genai.Client(
                     api_key=_get_api_key(),
                     http_options={"api_version": "v1alpha" if self._enhanced_live else "v1beta"}
