@@ -97,7 +97,6 @@ from actions.app_crash_guardian import start_watcher as start_crash_guardian
 from actions.usb_device_intelligence import _handler as usb_device_action
 from actions.download_watcher import _handler as download_watcher_action
 from actions.context_action_bubble import _handler as context_action_handler
-from actions.guest_session import is_active as guest_session_active
 from core.execution_trace import start_session as trace_start_session, tool_start as trace_tool_start, tool_end as trace_tool_end
 from core.no_progress import NoProgressGuard
 
@@ -1230,11 +1229,6 @@ class JarvisLive:
 
     def _run_local_action(self, name: str, args: dict) -> str:
         try:
-            if guest_session_active() and name in {"save_memory", "forget_memory", "recall_memory", "manage_routine"}:
-                result = "Guest session is active. Personal memory access is disabled."
-                self.ui.write_log("SYS: " + result)
-                return result
-
             if emergency_stop.is_active() and name != "emergency_kill_switch":
                 result = "Emergency stop is active. The requested local action was not performed."
                 self.ui.write_log("SYS: " + result)
@@ -2568,8 +2562,6 @@ class JarvisLive:
     async def _save_session_summary(self) -> None:
         """Summarise the current session in 1-2 sentences and save to long_term.json."""
         log = self._session_log
-        if guest_session_active():
-            return
         if len(log) < 3:          # need at least one exchange to be worth saving
             return
         self._session_log = []
