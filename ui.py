@@ -3547,6 +3547,12 @@ class MainWindow(QMainWindow):
         except Exception:
             return False
 
+    def is_camera_hud_open(self) -> bool:
+        try:
+            return self._hud_cam_stack.currentIndex() == 1
+        except Exception:
+            return False
+
     def _show_camera_frame(self, img_bytes: bytes):
         """Slot — display camera preview overlay (main thread)."""
         self._cam_preview.show_frame(img_bytes)
@@ -5861,6 +5867,12 @@ class JarvisUI:
     def is_weather_hud_open(self) -> bool:
         try:
             return bool(self._win.is_weather_hud_open())
+        except Exception:
+            return False
+
+    def is_camera_hud_open(self) -> bool:
+        try:
+            return bool(self._win.is_camera_hud_open())
         except Exception:
             return False
 
