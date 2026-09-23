@@ -80,8 +80,8 @@ def _monitor_rects() -> list[dict[str, Any]]:
         ctypes.c_int,
         ctypes.c_void_p,
         ctypes.c_void_p,
-        ctypes.POINTER(ctypes.c_int),
-        ctypes.c_double,
+        ctypes.POINTER(wintypes.RECT),
+        ctypes.c_void_p,
     )
 
     class RECT(ctypes.Structure):
@@ -209,6 +209,9 @@ def _score_window(window: WindowInfo, query: str) -> int:
 
 def _find_window(app: str) -> WindowInfo | None:
     query = str(app or "").strip()
+    query = query.removesuffix(" app").strip()
+    if query.casefold() in {"the", "the app"}:
+        return None
     if not query:
         return None
 
@@ -361,6 +364,8 @@ def _move_to_monitor(window: WindowInfo, monitor_index: int) -> str:
         return f"Monitor {monitor_index} does not exist. I detected {len(monitors)} monitors."
 
     hwnd = window.hwnd
+    if hwnd in _fullscreen_states:
+        _restore(window)
     _focus(hwnd)
 
     left, top, right, bottom = _window_rect(hwnd)
