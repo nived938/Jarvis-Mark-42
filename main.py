@@ -1042,16 +1042,19 @@ class JarvisLive:
         if any(k in low for k in ("wake up jarvis", "wake jarvis")):
             self.wake(reason="local command")
             return True
-        if any(k in low for k in ("sleep jarvis", "put jarvis to sleep", "make jarvis sleep")):
+        # Lifecycle controls are intentionally strict: the command must name
+        # JARVIS. Generic "sleep", "restart", "shutdown" or "close" never
+        # controls the application.
+        if low == "sleep jarvis":
             self.sleep(reason="local command", manual=True)
             return True
-        if any(k in low for k in ("restart jarvis", "reboot jarvis")):
+        if low == "restart jarvis":
             if self._loop:
                 asyncio.run_coroutine_threadsafe(self._lifecycle_action("restart"), self._loop)
             else:
                 self._manager.restart()
             return True
-        if any(k in low for k in ("shutdown jarvis", "close jarvis", "exit jarvis", "stop jarvis")):
+        if low == "shutdown jarvis":
             if self._loop:
                 asyncio.run_coroutine_threadsafe(self._lifecycle_action("shutdown"), self._loop)
             else:
@@ -1077,17 +1080,28 @@ class JarvisLive:
             self._run_local_action("emergency_kill_switch", {"action": "release", "_local": True})
             return True
 
-        # Weather HUD close controls stay local so they work even if the
-        # cloud model is busy or temporarily disconnected.
-        if any(k in low for k in (
-            "close weather", "close weather hud", "close weather screen",
-            "hide weather", "exit weather", "dismiss weather",
-        )) or (
+        # HUD close controls stay local so they work even if Gemini is busy.
+        # A bare "close" only closes an active HUD; it can never shut down JARVIS.
+        if (
             self.ui.is_weather_hud_open()
-            and low in ("close it", "close that", "hide it", "hide that")
+            and (
+                low in ("close", "close it", "close that", "hide", "hide it", "hide that")
+                or any(k in low for k in (
+                    "close weather", "close weather hud", "close weather screen",
+                    "hide weather", "exit weather", "dismiss weather",
+                ))
+            )
         ):
             self.ui.stop_weather_view()
             self.ui.write_log("SYS: Weather HUD closed.")
+            return True
+
+        if self.ui.is_camera_hud_open() and low in (
+            "close", "close it", "close that", "hide", "hide it", "hide that",
+            "close camera", "stop camera", "turn off camera",
+        ):
+            self.ui.stop_camera_stream()
+            self.ui.write_log("SYS: Camera HUD closed.")
             return True
 
         # Weather is a direct local API action — never route weather requests
@@ -1570,6 +1584,22 @@ class JarvisLive:
                 name=name,
                 response={"result": "Emergency stop is active. Action not performed.", "blocked": True},
             )
+
+        # Lifecycle tools require an explicit user phrase ending in "jarvis".
+        # This is a hard guard against an LLM interpreting "close" as shutdown.
+        if name in {"shutdown_jarvis", "restart_jarvis", "sleep_jarvis"}:
+            command = str(getattr(self, "_current_turn_text", "") or "").casefold().strip()
+            lifecycle_ok = (
+                command in {"shutdown jarvis", "restart jarvis", "sleep jarvis"}
+            )
+            if not lifecycle_ok:
+                result = "Lifecycle action blocked: say 'shutdown jarvis', 'restart jarvis', or 'sleep jarvis' explicitly."
+                self.ui.write_log("SYS: " + result)
+                return types.FunctionResponse(
+                    id=fc.id,
+                    name=name,
+                    response={"result": result, "blocked": True},
+                )
 
         self.ui.set_state("THINKING")
 
@@ -2103,6 +2133,7 @@ class JarvisLive:
                             txt = _clean_transcript(sc.input_transcription.text)
                             if txt:
                                 in_buf.append(txt)
+                                self._current_turn_text = " ".join(in_buf).strip()
                                 self._last_user_speech = time.monotonic()
                                 # Refresh context before the next turn so JARVIS can interpret
                                 # "this window", "this app", and similar references.
@@ -2143,6 +2174,7 @@ class JarvisLive:
                                         "text": full_in,
                                         "ts": datetime.now().isoformat(),
                                     }))
+                            self._current_turn_text = full_in
                             in_buf = []
 
                             full_out = " ".join(out_buf).strip()
@@ -2466,7 +2498,10 @@ class JarvisLive:
         log = self._session_log
         if len(log) < 3:          # need at least one exchange to be worth saving
             return
-        self._session_log = []    # reset immediately so the next session starts clean
+        self._session_log = []
+        # Raw user text for the currently active Gemini turn. Used to guard
+        # lifecycle tools so generic words like "close" can never shut down JARVIS.
+        self._current_turn_text = ""    # reset immediately so the next session starts clean
 
         memory = load_memory()
         lang_entry = memory.get("identity", {}).get("language", {})
