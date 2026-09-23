@@ -21,4 +21,4 @@ def _handler(parameters, **_):
         return "\n".join(lines)
     return "Trace action must be list, inspect, or replay."
 
-TOOL={"name":"trace_replay","description":"Inspect and dry-run replay JARVIS execution traces to debug exactly what tools were called and what they returned.","parameters":{"type":"OBJECT","properties":{"action":{"type":"STRING","description":"list | inspect | replay"},"trace_id":{"type":"STRING","description":"Trace identifier"}},"required":["action"]},""handler":_handler}
+TOOL={"name":"trace_replay","description":"Inspect and dry-run replay JARVIS execution traces to debug exactly what tools were called and what they returned.","parameters":{"type":"OBJECT","properties":{"action":{"type":"STRING","description":"list | inspect | replay"},"trace_id":{"type":"STRING","description":"Trace identifier"}},"required":["action"]},"handler":_handler}
