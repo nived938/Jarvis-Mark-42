@@ -194,9 +194,9 @@ def get_turn_tuning() -> dict:
             return default
 
     return {
-        "enabled":    bool(cfg.get("enabled", False)),
-        "silence_ms": _int("silence_ms", 550, 200, 3000),
-        "prefix_ms":  _int("prefix_ms", 150, 0, 1000),
+        "enabled":    bool(cfg.get("enabled", True)),
+        "silence_ms": _int("silence_ms", 600, 200, 3000),
+        "prefix_ms":  _int("prefix_ms", 120, 0, 1000),
         # "high" = quicker to decide speech has ended.
         "end_sensitivity":   str(cfg.get("end_sensitivity", "high")).lower(),
         "start_sensitivity": str(cfg.get("start_sensitivity", "default")).lower(),
@@ -228,7 +228,7 @@ def get_proactive_audio_enabled() -> bool:
     sentence as not addressed to it, and only changing its mind once the next
     one arrives.
     """
-    return bool(load_api_keys().get("proactive_audio", True))
+    return bool(load_api_keys().get("proactive_audio", False))
 
 
 def save_proactive_audio_enabled(enabled: bool) -> None:
