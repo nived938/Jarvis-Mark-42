@@ -2187,21 +2187,6 @@ class JarvisLive:
                                 in_buf.append(txt)
                                 self._current_turn_text = " ".join(in_buf).strip()
                                 self._last_user_speech = time.monotonic()
-                                # Refresh context before the next turn so JARVIS can interpret
-                                # "this window", "this app", and similar references.
-                                try:
-                                    if self.session:
-                                        asyncio.create_task(
-                                            self.session.send_client_content(
-                                                turns={"role": "user", "parts": [{
-                                                    "text": "[ACTIVE APP CONTEXT]\n" + self._active_app_context()
-                                                }]},
-                                                turn_complete=False,
-                                            )
-                                        )
-                                except Exception:
-                                    pass
-
                         if sc.turn_complete:
                             if self._turn_done_event:
                                 self._turn_done_event.set()
