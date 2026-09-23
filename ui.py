@@ -446,33 +446,6 @@ class HudCanvas(QWidget):
         self._tmr.timeout.connect(self._step)
         self._tmr.start(16)
 
-    def set_weather(self, payload: dict) -> None:
-        """Update and show the compact weather card over the animated HUD."""
-        data = dict(payload or {})
-        place = str(data.get("location") or "Unknown").strip()
-        region = str(data.get("region") or "").strip()
-        if region:
-            place = f"{place}, {region}"
-        temp = data.get("temperature")
-        feels = data.get("feelslike")
-        cond = str(data.get("condition") or "Unknown").strip()
-        hum = data.get("humidity")
-        wind = data.get("wind_speed")
-
-        self._hud_weather_place.setText(f"LOC  {place[:28]}")
-        self._hud_weather_temp.setText(
-            f"TEMP {temp if temp not in (None, '') else '—'}°C  "
-            f"FEEL {feels if feels not in (None, '') else '—'}°"
-        )
-        self._hud_weather_cond.setText(cond[:31])
-        self._hud_weather_meta.setText(
-            f"HUM {hum if hum not in (None, '') else '—'}%  "
-            f"WIND {wind if wind not in (None, '') else '—'} km/h"
-        )
-        self._position_weather_hud()
-        self._weather_hud.show()
-        self._weather_hud.raise_()
-
     def glance(self, dx: float, dy: float, hold: float = 1.1) -> None:
         """Ask the avatar to look somewhere for a moment (see HoloAvatar.glance)."""
         try:
