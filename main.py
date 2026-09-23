@@ -71,7 +71,6 @@ from actions.proactive         import ProactiveEngine
 from actions.background_monitor import (
     add_monitor, remove_monitor, list_monitors, check_all as monitor_check_all,
 )
-from actions.web_search        import _news as _fetch_news_sync
 from memory.config_manager     import (
     get_brief_enabled, get_media_resolution, get_proactive_audio_enabled,
     get_push_to_talk_enabled, get_thinking_enabled, get_turn_tuning, get_voice,
@@ -723,6 +722,8 @@ class JarvisLive:
         self._last_user_speech = time.monotonic()  # updated on every user utterance
         self._session_log: list[str] = []          # conversation turns for end-of-session summary
         self._current_turn_text = ""
+        self._last_local_command = ""
+        self._last_local_command_time = 0.0
         self._no_progress = NoProgressGuard(repeat_limit=3)
         self._trace_id = trace_start_session()
 
@@ -1002,6 +1003,18 @@ class JarvisLive:
         return url, key, f"{url}/auto-login?key={key}", manual
 
     def _on_text_command(self, text: str):
+        _incoming = " ".join(str(text or "").split()).casefold()
+        _now = time.monotonic()
+        if (
+            _incoming
+            and _incoming == self._last_local_command
+            and _now - self._last_local_command_time < 1.5
+        ):
+            self.ui.write_log("SYS: Duplicate command ignored.")
+            return
+        self._last_local_command = _incoming
+        self._last_local_command_time = _now
+
         # Emergency release/trigger is deliberately handled before the global
         # emergency latch check so the user can always unlock JARVIS locally.
         local = self._queue_local_command(text)
