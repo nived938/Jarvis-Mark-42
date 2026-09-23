@@ -211,9 +211,24 @@ def _score_window(window: WindowInfo, query: str) -> int:
 def _find_window(app: str) -> WindowInfo | None:
     query = str(app or "").strip()
     query = query.removesuffix(" app").strip()
-    if query.casefold() in {"the", "the app"}:
+    lowered = query.casefold()
+
+    if lowered in {"this", "this app", "current", "current app", "active", "active app"}:
+        hwnd = user32.GetForegroundWindow()
+        if hwnd:
+            title = _window_text(hwnd)
+            if title:
+                pid = ctypes.c_ulong()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                return WindowInfo(
+                    hwnd=int(hwnd),
+                    title=title,
+                    process_name=_process_name(pid.value),
+                    pid=int(pid.value),
+                )
         return None
-    if not query:
+
+    if lowered in {"the", "the app"} or not query:
         return None
 
     candidates = []
