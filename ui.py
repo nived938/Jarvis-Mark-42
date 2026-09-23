@@ -3450,6 +3450,7 @@ class MainWindow(QMainWindow):
         self._quiz_hide_sig.connect(self._hide_quiz)
         self._review_sig.connect(self._show_review)
         self._cam_stop = threading.Event()
+        self._cam_thread = None
 
         # Camera preview overlay (child of central widget, positioned in resizeEvent)
         self._cam_preview = _CameraPreview(self.centralWidget())
@@ -3625,9 +3626,15 @@ class MainWindow(QMainWindow):
                 )
 
     def start_camera_stream(self) -> None:
+        # Do not start a second webcam reader when the live camera is already open.
+        if self._hud_cam_stack.currentIndex() == 1:
+            t = self._cam_thread
+            if t is not None and t.is_alive():
+                return
         self._cam_stop.clear()
         self._cam_stream_sig.emit(True)
         t = threading.Thread(target=self._cam_loop, daemon=True, name="cam-stream")
+        self._cam_thread = t
         t.start()
 
     def _cam_loop(self) -> None:
