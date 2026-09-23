@@ -50,10 +50,12 @@ def _body(payload):
 
 def _code(text,subject=""):
     sample=(subject+"\n"+text)
-    m=re.search(r"(?i)(?:otp|verification|security|one[- ]time|login|confirmation)\D{0,32}([A-Z0-9]{4,10})",sample)
-    if m: return m.group(1)
-    candidates=re.findall(r"\b\d{6}\b",sample)
-    return candidates[0] if candidates else ""
+    m=re.search(
+        r"(?i)(?:otp|verification|security|one[- ]time|login|confirmation)"
+        r"\D{0,32}([A-Z0-9]{4,10})",
+        sample,
+    )
+    return m.group(1) if m else ""
 
 def _format(msg,include_body=False):
     headers=(msg.get("payload") or {}).get("headers",[])
@@ -65,7 +67,7 @@ def _format(msg,include_body=False):
     code=_code(body,subject)
     try: date=parsedate_to_datetime(date).astimezone().strftime("%Y-%m-%d %H:%M")
     except Exception: pass
-    out=f"{subject}\nFrom: {sender}\nDate: {date}\n{snippet}"
+    out=f"Message ID: {msg.get('id','')}\n{subject}\nFrom: {sender}\nDate: {date}\n{snippet}"
     if code: out+=f"\nPOSSIBLE CODE: {code}"
     if include_body and body: out+="\n\n"+body[:3500]
     return out
