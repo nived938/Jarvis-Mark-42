@@ -3564,7 +3564,10 @@ class MainWindow(QMainWindow):
         if start:
             self._hud_cam_stack.setCurrentIndex(1)
         else:
-            self._hud_cam_stack.setCurrentIndex(0)
+            # A camera thread can finish just after weather takes over the stack.
+            # Do not let that late signal close the weather HUD.
+            if self._hud_cam_stack.currentIndex() == 1:
+                self._hud_cam_stack.setCurrentIndex(0)
             self._cam_live_lbl.clear()
 
     def _on_cam_frame(self, data: bytes) -> None:
