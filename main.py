@@ -1115,8 +1115,7 @@ class JarvisLive:
             "add ask jarvis context menu",
             "add ask jarvis to right click menu",
         ):
-            result = self._run_local_action("ask_jarvis_context", {"action": "install_menu"})
-            self.ui.write_log("SYS: " + str(result))
+            self._run_local_action("ask_jarvis_context", {"action": "install_menu"})
             return True
 
         # Emergency stop controls are always local and remain available
