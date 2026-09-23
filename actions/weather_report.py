@@ -3,7 +3,7 @@ Weatherstack-backed weather for JARVIS.
 
 No browser is opened for weather. Location is inferred from the public IP when
 the user does not name a city, then Weatherstack supplies current conditions.
-The same data is pushed into the HUD weather card and the detailed content panel.
+The same data is pushed into a temporary full-screen weather HUD with animated visuals.
 """
 
 from __future__ import annotations
