@@ -34,7 +34,7 @@ The new Mark 43 safety layer adds a fail-closed Emergency Kill Switch and guarde
 ### New Mark 43 desktop integrations
 The branch now includes application crash watching, USB/device monitoring, download completion watching,
 hand-gesture recognition, short local audio-event classification, screen-change monitoring, global context
-actions, privacy shielding, per-application internet locking, temporary guest sessions, named desktop scenes,
+actions, privacy shielding, per-application internet locking, named desktop scenes,
 camera document scanning, a no-progress tool guard, and local execution traces.
 
 It also includes gmail_manager.py and calender_manager.py using Google's official Gmail and Calendar APIs
