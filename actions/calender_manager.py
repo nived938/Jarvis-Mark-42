@@ -59,7 +59,10 @@ def _handler(parameters,**_):
         end=str(parameters.get("end","")).strip()
         if not start:return "Provide start as ISO 8601 datetime, for example 2026-09-24T15:00:00+05:30."
         if not end:end=(datetime.fromisoformat(start)+timedelta(minutes=int(parameters.get("duration_minutes",60) or 60))).isoformat()
-        body={"summary":summary,"start":{"dateTime":start,"timeZone":parameters.get("time_zone","")},"end":{"dateTime":end,"timeZone":parameters.get("time_zone","")}}
+        body={"summary":summary,"start":{"dateTime":start},"end":{"dateTime":end}}
+        if parameters.get("time_zone"):
+            body["start"]["timeZone"]=str(parameters["time_zone"])
+            body["end"]["timeZone"]=str(parameters["time_zone"])
         if parameters.get("location"):body["location"]=str(parameters["location"])
         if parameters.get("description"):body["description"]=str(parameters["description"])
         e=svc.events().insert(calendarId=cal,body=body).execute()
