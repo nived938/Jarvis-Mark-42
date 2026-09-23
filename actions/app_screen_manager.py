@@ -21,6 +21,11 @@ if platform.system() != "Windows":
 
 
 user32 = ctypes.windll.user32
+kernel32 = ctypes.windll.kernel32
+
+# GetCurrentThreadId is exported by Kernel32, not User32.
+_kernel32_get_current_thread_id = kernel32.GetCurrentThreadId
+_kernel32_get_current_thread_id.restype = wintypes.DWORD
 
 SW_HIDE = 0
 SW_SHOWNORMAL = 1
@@ -250,7 +255,7 @@ def _focus(hwnd: int) -> None:
         user32.ShowWindow(hwnd, SW_RESTORE)
 
     # Attach to the foreground thread briefly so Windows allows the focus change.
-    current_thread = user32.GetCurrentThreadId()
+    current_thread = _kernel32_get_current_thread_id()
     foreground_thread = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
     if foreground_thread and foreground_thread != current_thread:
         user32.AttachThreadInput(current_thread, foreground_thread, True)
