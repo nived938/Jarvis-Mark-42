@@ -726,6 +726,13 @@ class JarvisLive:
         self._no_progress = NoProgressGuard(repeat_limit=3)
         self._trace_id = trace_start_session()
 
+        # Hybrid VAD state: server-side VAD still detects speech onset, while
+        # the local client detects the end of speech and sends audio_stream_end
+        # immediately. This avoids waiting through a long server silence window.
+        self._client_speech_active = False
+        self._client_last_voice = 0.0
+        self._client_vad_end_sent = False
+
         self._enhanced_live = True  # current Live model; kept for API-version fallback handling
         self._tuned_live    = True  # turn-taking / media / thinking knobs; same fallback
 
@@ -1953,15 +1960,17 @@ class JarvisLive:
     async def _send_realtime(self):
         while True:
             msg = await self.out_queue.get()
-            # Gemini 3.x Live rejects the old realtime_input.media_chunks field
-            # (what `media=...` maps to) and closes the socket with a 1007. Send
-            # mic / phone PCM through the new `audio` field instead. Queue items
-            # are {"data": <bytes>, "mime_type": <str>} from _listen_audio and
-            # the phone relay.
+            if msg.get("audio_stream_end"):
+                try:
+                    await self.session.send_realtime_input(audio_stream_end=True)
+                    print("[JARVIS] 🎤 Local VAD ended turn")
+                except Exception as exc:
+                    print(f"[JARVIS] ⚠️ Failed to finalize audio turn: {exc}")
+                continue
             await self.session.send_realtime_input(
                 audio=types.Blob(
                     data=msg["data"],
-                    mime_type=msg.get("mime_type", "audio/pcm"),
+                    mime_type=msg.get("mime_type", "audio/pcm;rate=16000"),
                 )
             )
 
@@ -2031,9 +2040,43 @@ class JarvisLive:
 
             if not self.ui.muted and not self._phone_active:
                 data = indata.tobytes()
+                now = time.monotonic()
+                level = _pcm_level(indata)
+
+                # Hybrid VAD:
+                # - server VAD remains responsible for speech onset
+                # - local energy VAD watches for sustained silence after speech
+                # - audio_stream_end immediately finalizes the turn
+                #
+                # Hysteresis avoids triggering from room noise: a little louder
+                # is needed to declare speech, while a lower threshold plus a
+                # short hangover ends it quickly.
+                speech_start = 0.08
+                speech_end = 0.04
+                hangover = 0.32
+
+                if not self._client_speech_active:
+                    if level >= speech_start:
+                        self._client_speech_active = True
+                        self._client_last_voice = now
+                        self._client_vad_end_sent = False
+                else:
+                    if level >= speech_end:
+                        self._client_last_voice = now
+                    elif (
+                        not self._client_vad_end_sent
+                        and now - self._client_last_voice >= hangover
+                    ):
+                        loop.call_soon_threadsafe(
+                            self.out_queue.put_nowait,
+                            {"audio_stream_end": True}
+                        )
+                        self._client_vad_end_sent = True
+                        self._client_speech_active = False
+
                 loop.call_soon_threadsafe(
                     self.out_queue.put_nowait,
-                    {"data": data, "mime_type": "audio/pcm"}
+                    {"data": data, "mime_type": "audio/pcm;rate=16000"}
                 )
                 # Feed the live mic level to the HUD so the waveform reacts to
                 # the user's actual voice while listening. Purely cosmetic — any
@@ -2823,6 +2866,9 @@ class JarvisLive:
                     self._vision_busy          = False
                     self._vision_last_time     = 0.0
                     self._interrupted          = False
+                    self._client_speech_active = False
+                    self._client_last_voice = 0.0
+                    self._client_vad_end_sent = False
 
                     print("[JARVIS] Connected.")
                     if _resumed_with:
