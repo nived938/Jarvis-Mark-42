@@ -1194,6 +1194,20 @@ class JarvisLive:
                 self.ui.write_log("SYS: " + str(result))
                 return True
 
+        other_screen_match = _re.match(
+            r"^(?:move|send)\s+(.+?)\s+to\s+(?:another|the other)\s+(?:monitor|screen|display)$",
+            raw,
+            _re.IGNORECASE,
+        )
+        if other_screen_match:
+            app_name = other_screen_match.group(1).strip()
+            result = self._run_local_action(
+                "app_screen_manager",
+                {"action": "move_next_monitor", "app": app_name},
+            )
+            self.ui.write_log("SYS: " + str(result))
+            return True
+
         move_match = _re.match(
             r"^(?:move|send)\s+(.+?)\s+to\s+(?:monitor|screen|display)\s+(\d+)$",
             raw,
