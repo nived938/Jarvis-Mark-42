@@ -3266,7 +3266,8 @@ class MainWindow(QMainWindow):
     _state_sig      = pyqtSignal(str)
     _content_sig    = pyqtSignal(str, str)   # (title, text) — thread-safe content display
     _weather_sig     = pyqtSignal(object)     # full weather HUD payload
-    _weather_close_sig = pyqtSignal()            # close weather HUD from any thread
+    _weather_close_sig = pyqtSignal()          # close weather HUD from any thread
+    _privacy_sig      = pyqtSignal(bool)       # privacy shield state
     _emergency_sig    = pyqtSignal(bool)        # emergency latch → Qt thread
     _reconfig_sig   = pyqtSignal()           # trigger setup overlay from any thread
     _camera_sig     = pyqtSignal(bytes)      # show camera frame preview (small overlay)
@@ -3435,6 +3436,7 @@ class MainWindow(QMainWindow):
         self._content_sig.connect(self._show_content)
         self._weather_sig.connect(self._show_weather)
         self._weather_close_sig.connect(self._close_weather_now)
+        self._privacy_sig.connect(self._apply_privacy_shield)
         self._emergency_sig.connect(self.set_emergency_active)
         self._reconfig_sig.connect(self._show_setup)
         self._camera_sig.connect(self._show_camera_frame)
@@ -3451,6 +3453,24 @@ class MainWindow(QMainWindow):
 
         # Camera preview overlay (child of central widget, positioned in resizeEvent)
         self._cam_preview = _CameraPreview(self.centralWidget())
+
+        # Privacy shield — deliberately local to the JARVIS window.
+        self._privacy_shield = QFrame(self.centralWidget())
+        self._privacy_shield.setStyleSheet(f"""
+            QFrame {{
+                background: rgba(0, 0, 0, 245);
+                border: 1px solid {C.PRI};
+            }}
+        """)
+        _privacy_lay = QVBoxLayout(self._privacy_shield)
+        _privacy_lay.setContentsMargins(20, 20, 20, 20)
+        _privacy_label = QLabel("PRIVACY SHIELD")
+        _privacy_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        _privacy_label.setFont(QFont("Courier New", 14, QFont.Weight.Bold))
+        _privacy_label.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        _privacy_lay.addWidget(_privacy_label)
+        self._privacy_shield.hide()
+        self._privacy_shield_active = False
 
         # Clipboard panel (child of central widget, bottom-center)
         self._clipboard_panel = ClipboardPanel(self.centralWidget())
@@ -3552,6 +3572,31 @@ class MainWindow(QMainWindow):
             return self._hud_cam_stack.currentIndex() == 1
         except Exception:
             return False
+
+    def _apply_privacy_shield(self, active: bool) -> None:
+        self._privacy_shield_active = bool(active)
+        if self._privacy_shield_active:
+            cw = self.centralWidget()
+            self._privacy_shield.setGeometry(cw.rect())
+            self._privacy_shield.show()
+            self._privacy_shield.raise_()
+        else:
+            self._privacy_shield.hide()
+
+    def set_privacy_shield(self, active: bool) -> None:
+        self._privacy_sig.emit(bool(active))
+
+    def privacy_shield_active(self) -> bool:
+        return bool(self._privacy_shield_active)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        try:
+            if hasattr(self, "_privacy_shield") and self._privacy_shield_active:
+                self._privacy_shield.setGeometry(self.centralWidget().rect())
+                self._privacy_shield.raise_()
+        except Exception:
+            pass
 
     def _show_camera_frame(self, img_bytes: bytes):
         """Slot — display camera preview overlay (main thread)."""
@@ -5849,6 +5894,27 @@ class JarvisUI:
     def show_content(self, title: str, text: str):
         """Thread-safe: display content in the panel below the HUD."""
         self._win._content_sig.emit(title[:48], text[:4000])
+
+    def send_text_command(self, text: str) -> None:
+        """Thread-safe entry point used by context shortcuts."""
+        try:
+            cb = self._win.on_text_command
+            if callable(cb):
+                threading.Thread(target=cb, args=(str(text),), daemon=True).start()
+        except Exception:
+            pass
+
+    def set_privacy_shield(self, active: bool) -> None:
+        try:
+            self._win._privacy_sig.emit(bool(active))
+        except Exception:
+            pass
+
+    def privacy_shield_active(self) -> bool:
+        try:
+            return bool(self._win.privacy_shield_active())
+        except Exception:
+            return False
 
     def show_weather(self, payload: dict) -> None:
         """Thread-safe: show the temporary full weather HUD."""
