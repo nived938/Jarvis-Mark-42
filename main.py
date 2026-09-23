@@ -1088,7 +1088,10 @@ class JarvisLive:
                 ))
                 else "current"
             )
-            self._run_local_action("weather_report", {"city": city, "report": report, "days": 5})
+            self._run_local_action(
+                "weather_report",
+                {"city": city, "report": report, "days": 5, "_speak_result": True},
+            )
             return True
 
         # Local stopwatch controls: no Gemini round trip is needed for timing.
@@ -1175,7 +1178,13 @@ class JarvisLive:
             else:
                 result = "Local action unavailable."
             self.ui.write_log(f"SYS: {result}")
-            return str(result)
+            result_text = str(result)
+            if name == "weather_report" and args.get("_speak_result"):
+                # Local weather bypasses Gemini's normal user-turn path, so
+                # explicitly send the completed result into the active Live
+                # session for spoken delivery.
+                self.speak(result_text)
+            return result_text
         except Exception as e:
             self.ui.write_log(f"ERR: Local command failed — {e}")
             return str(e)
