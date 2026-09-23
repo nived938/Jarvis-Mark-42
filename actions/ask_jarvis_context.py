@@ -51,4 +51,4 @@ def _handler(parameters, player=None, **_):
         player.send_text_command(f"Analyze this selected text and tell me what matters:\n{value}")
     return "Selected context sent to JARVIS."
 
-TOOL={"name":"ask_jarvis_context","description":"Send selected text or a file path directly into a new JARVIS context request.","parameters":{"type":"OBJECT","properties":{"mode":{"type":"STRING","description":"text | file"},"value":{"type":"STRING","description":"Selected text or absolute file path"}},"required":["value"]},"handler":_handler}
+TOOL={"name":"ask_jarvis_context","description":"Send selected text or a file path to JARVIS, or install the Windows right-click 'Ask JARVIS' menu item for files.","parameters":{"type":"OBJECT","properties":{"action":{"type":"STRING","description":"send | install_menu"},"mode":{"type":"STRING","description":"text | file"},"value":{"type":"STRING","description":"Selected text or absolute file path"}},"required":["action"]},"handler":_handler}
