@@ -18,7 +18,7 @@ from pathlib import Path
 import psutil
 
 try:
-    from memory.config_manager import load_api_keys
+    from memory.config_manager import load_api_keys, get_local_ai_model
 except Exception:
     load_api_keys = lambda: {}
 
@@ -110,6 +110,9 @@ def select_model(mode: str = "balanced", has_image: bool = False) -> str | None:
     """
     Choose an installed local model using the user's available memory.
 
+    A user-selected model wins for ordinary text work. Vision requests still
+    require an image-capable model, so a non-vision selection is ignored there.
+
     Modes:
       fast     -> smallest model first
       balanced -> 2B/4B first
@@ -117,10 +120,15 @@ def select_model(mode: str = "balanced", has_image: bool = False) -> str | None:
       vision   -> llama3.2-vision when enough RAM is free
     """
     mode = str(mode or "balanced").strip().lower()
+    installed = installed_models()
+
+    preferred = get_local_ai_model()
+    if preferred and preferred in installed and not has_image and mode != "vision":
+        return preferred
 
     if has_image or mode == "vision":
-        # The installed 11B vision model is the only local image-capable model
-        # shown by the user's current Ollama inventory.
+        # The installed 11B vision model is the image-capable model in the
+        # current Ollama inventory.
         return _pick(["llama3.2-vision:11b"], min_memory_gb=8.5)
 
     if mode == "fast":
