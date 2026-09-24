@@ -1301,22 +1301,19 @@ class JarvisLive:
             "dismiss", "dismiss it", "dismiss that", "dismiss this",
             "exit", "exit it", "exit that", "exit this",
             "go back", "return", "return to jarvis", "back to jarvis",
+            "close hud", "close the hud", "hide hud", "hide the hud",
+            "close panel", "close viewer", "close result", "close results",
+            "dismiss panel", "dismiss viewer",
         }
         if self.ui.is_any_hud_open() and low in hud_close_phrases:
             self.ui.close_active_hud()
             self.ui.write_log("SYS: Active HUD closed.")
             return True
 
-        if (
-            self.ui.is_weather_hud_open()
-            and (
-                low in ("close", "close it", "close that", "hide", "hide it", "hide that")
-                or any(k in low for k in (
-                    "close weather", "close weather hud", "close weather screen",
-                    "hide weather", "exit weather", "dismiss weather",
-                ))
-            )
-        ):
+        if self.ui.is_weather_hud_open() and any(k in low for k in (
+            "close weather", "close weather hud", "close weather screen",
+            "hide weather", "exit weather", "dismiss weather",
+        )):
             self.ui.stop_weather_view()
             self.ui.write_log("SYS: Weather HUD closed.")
             return True
@@ -1362,10 +1359,9 @@ class JarvisLive:
         )
         if smart_match:
             mode = smart_match.group(1)
-            self._run_local_action("local_ai_router", {"action": "enable"})
             self._run_local_action("local_ai_router", {"action": "set_mode", "mode": mode})
+            self._run_local_action("local_ai_router", {"action": "enable"})
             self.ui.write_log(f"SYS: Local AI mode set to {mode}.")
-            self.ui.show_local_ai_picker()
             return True
 
         # Camera commands must be handled before generic "open <app>" matching.
