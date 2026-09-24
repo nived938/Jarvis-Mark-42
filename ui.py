@@ -3791,6 +3791,8 @@ class MainWindow(QMainWindow):
     _result_close_sig = pyqtSignal()
     _local_ai_sig    = pyqtSignal(object)
     _geo_maps_sig    = pyqtSignal(str)
+    _geo_maps_locate_sig = pyqtSignal()
+    _geo_maps_set_location_sig = pyqtSignal()
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -3977,6 +3979,8 @@ class MainWindow(QMainWindow):
         self._result_close_sig.connect(self._close_result_hud)
         self._local_ai_sig.connect(self._show_local_ai_hud)
         self._geo_maps_sig.connect(self._show_geo_maps)
+        self._geo_maps_locate_sig.connect(self._locate_geo_maps_on_qt_thread)
+        self._geo_maps_set_location_sig.connect(self._set_geoapify_location_on_qt_thread)
         self._cam_stop = threading.Event()
         self._cam_thread = None
 
@@ -4168,12 +4172,19 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    def locate_geoapify_maps(self) -> None:
-        """Thread-safe: center the Geoapify map on approximate current location."""
+    def _locate_geo_maps_on_qt_thread(self) -> None:
+        """Run map location UI work on the Qt GUI thread."""
         try:
             if self._hud_cam_stack.currentIndex() != 5:
                 self._hud_cam_stack.setCurrentIndex(5)
             self._geo_maps_hud.locate_user()
+        except Exception as exc:
+            self.write_log(f"ERR: Geoapify locate UI failed — {exc}")
+
+    def locate_geoapify_maps(self) -> None:
+        """Thread-safe: request map location UI work on the Qt thread."""
+        try:
+            self._geo_maps_locate_sig.emit()
         except Exception:
             pass
 
@@ -4183,12 +4194,19 @@ class MainWindow(QMainWindow):
         except Exception:
             return False
 
-    def set_geoapify_location(self) -> None:
-        """Open the map if needed and enter click-to-set-location mode."""
+    def _set_geoapify_location_on_qt_thread(self) -> None:
+        """Open the map if needed and enter click-to-set-location mode on Qt."""
         try:
             if self._hud_cam_stack.currentIndex() != 5:
                 self._show_geo_maps("")
             self._geo_maps_hud.set_location_mode()
+        except Exception as exc:
+            self.write_log(f"ERR: Geoapify set-location UI failed — {exc}")
+
+    def set_geoapify_location(self) -> None:
+        """Thread-safe: request click-to-set-location mode on the Qt thread."""
+        try:
+            self._geo_maps_set_location_sig.emit()
         except Exception:
             pass
 
