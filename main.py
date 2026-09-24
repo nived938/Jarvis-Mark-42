@@ -2137,26 +2137,6 @@ class JarvisLive:
                 r = await loop.run_in_executor(None, lambda: self._action_registry.run(name, args, _ctx))
                 result = r or "Done."
 
-                # Important results are mirrored to the persistent HUD viewer.
-                # Code can also be copied automatically when JARVIS generates or edits it.
-                try:
-                    _hud = _hud_result_payload(name, args, str(result))
-                    if _hud is not None:
-                        _hud_title, _hud_body, _auto_copy = _hud
-                        self.ui.show_content(_hud_title, _hud_body)
-                        if _auto_copy:
-                            try:
-                                import pyperclip
-                                _code_only = _hud_body.split("===== CODE =====", 1)[-1]
-                                _code_only = _code_only.split("===== JARVIS RESULT =====", 1)[0].strip()
-                                if _code_only:
-                                    pyperclip.copy(_code_only)
-                                    self.ui.write_log("SYS: Code copied to clipboard.")
-                            except Exception as _copy_exc:
-                                self.ui.write_log(f"SYS: Could not copy code to clipboard: {_copy_exc}")
-                except Exception as _hud_exc:
-                    self.ui.write_log(f"SYS: HUD result display skipped: {_hud_exc}")
-
                 if name == "file_controller" and bool(args.get("preview", False)):
                     self.ui.show_content("FILE OPERATION PREVIEW", str(result))
                 # web_search: mirror results to the on-screen content panel
@@ -2182,6 +2162,27 @@ class JarvisLive:
             result = f"Tool '{name}' failed: {e}"
             traceback.print_exc()
             self.speak_error(name, e)
+
+        # Render important tool results from the common exit path. This covers
+        # actions, plugins, and any future dispatcher path without relying on a
+        # particular branch above.
+        try:
+            _hud = _hud_result_payload(name, args, str(result))
+            if _hud is not None:
+                _hud_title, _hud_body, _auto_copy = _hud
+                self.ui.show_content(_hud_title, _hud_body)
+                if _auto_copy:
+                    try:
+                        import pyperclip
+                        _code_only = _hud_body.split("===== CODE =====", 1)[-1]
+                        _code_only = _code_only.split("===== JARVIS RESULT =====", 1)[0].strip()
+                        if _code_only:
+                            pyperclip.copy(_code_only)
+                            self.ui.write_log("SYS: Code copied to clipboard.")
+                    except Exception as _copy_exc:
+                        self.ui.write_log(f"SYS: Could not copy code to clipboard: {_copy_exc}")
+        except Exception as _hud_exc:
+            self.ui.write_log(f"SYS: HUD result display skipped: {_hud_exc}")
 
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
