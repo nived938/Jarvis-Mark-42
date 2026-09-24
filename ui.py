@@ -4078,20 +4078,6 @@ class MainWindow(QMainWindow):
         self._local_ai_sig.emit(payload)
 
 
-    def show_geoapify_maps(self, query: str = "") -> None:
-        """Thread-safe: open Geoapify Maps in the center HUD."""
-        try:
-            self._win.show_geoapify_maps(str(query or ""))
-        except Exception:
-            pass
-
-    def is_geo_maps_hud_open(self) -> bool:
-        try:
-            return bool(self._win.is_geo_maps_hud_open())
-        except Exception:
-            return False
-
-
     def show_local_ai_picker(self) -> None:
         threading.Thread(
             target=self._load_local_ai_hud,
@@ -6644,6 +6630,19 @@ class JarvisUI:
     def is_camera_hud_open(self) -> bool:
         try:
             return bool(self._win.is_camera_hud_open())
+        except Exception:
+            return False
+
+    def show_geoapify_maps(self, query: str = "") -> None:
+        """Thread-safe: open/search the Geoapify map HUD."""
+        try:
+            self._win.show_geoapify_maps(str(query or ""))
+        except Exception:
+            pass
+
+    def is_geo_maps_hud_open(self) -> bool:
+        try:
+            return bool(self._win.is_geo_maps_hud_open())
         except Exception:
             return False
 
