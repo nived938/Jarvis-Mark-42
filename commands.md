@@ -141,3 +141,67 @@ run my routine ...
 python -m compileall -q main.py actions core memory
 python main.py
 ```
+
+## Resource manager
+
+```text
+show my resource usage
+what is using the most RAM
+what is using the most CPU
+analyze my computer performance
+```
+
+These results open in the center HUD.
+
+## Local AI / Ollama
+
+```text
+use local AI
+use local AI in smart mode
+show local AI
+show my local AI models
+is local AI available
+enable local AI
+disable local AI
+```
+
+`show local AI` opens an interactive HUD picker. Use Up/Down to highlight a model and Enter to select it. The selected model is remembered for future local text tasks.
+
+```text
+show my voice profiles
+switch to calm voice
+switch to energetic voice
+switch to deep voice
+switch to normal voice
+```
+
+Voice-profile results appear in the center HUD. Selecting a voice reconnects the Live session with that voice.
+
+## Notification intelligence
+
+```text
+what notifications do I have
+show important notifications
+give me a notification digest
+enable notification quiet mode for 30 minutes
+disable notification quiet mode
+```
+
+Notification summaries and digests appear in the center HUD.
+
+## HUD closing
+
+When any temporary center HUD is open, these phrases close the active HUD locally without involving Gemini:
+
+```text
+close
+close it
+close that
+close this
+hide it
+dismiss it
+close the hud
+go back
+```
+
+This applies to the camera HUD, weather HUD, result HUD, and Local AI picker.
