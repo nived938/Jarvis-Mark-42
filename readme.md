@@ -99,6 +99,10 @@ The current branch includes:
 - application crash monitoring
 - USB/PnP monitoring
 - download completion monitoring
+- automatic download organization by file type
+- Environment Doctor diagnostics
+- Hardware Health Center with CPU/GPU/RAM/disk/battery telemetry
+- storage cleanup intelligence for safe cache/temp reclamation
 
 For example:
 
@@ -146,6 +150,7 @@ list open windows
 - notification inbox
 - focus mode
 - desktop scenes
+- personal habit learning from compact local activity aggregates
 
 ### Gmail and Calendar
 
@@ -174,6 +179,17 @@ Calendar supports:
 - calendar listing
 
 Both use local Google desktop OAuth.
+
+### Reasoning and Android autonomy
+
+JARVIS now uses context-driven intent resolution instead of rigid phrase-trigger
+routing. Complex or diagnostic work can invoke a second reasoning tier that
+returns an executable decision summary while keeping private chain-of-thought
+internal.
+
+The Android Companion uses ADB for device discovery, wireless debugging
+connect/disconnect, app launch, touch/input, screenshots, battery/storage
+inspection, and optional scrcpy mirroring.
 
 ### Monitoring and reliability
 
