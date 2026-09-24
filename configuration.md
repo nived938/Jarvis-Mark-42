@@ -101,3 +101,38 @@ Examples:
 - downloaded scans
 
 These should remain local.
+
+## Local AI / Ollama
+
+The local model router uses Ollama's local HTTP service by default:
+
+```json
+{
+  "local_ai_enabled": true,
+  "ollama_base_url": "http://127.0.0.1:11434"
+}
+```
+
+JARVIS discovers installed models automatically and chooses a model based on the requested task and available RAM. The current router recognizes the user's installed Qwen and Llama vision models without hardcoding a single model as mandatory.
+
+The direct `local_ai_router` action can also enable or disable local AI at runtime.
+
+## Voice profiles
+
+Named profiles are stored locally in:
+
+```text
+memory/voice_profiles.json
+```
+
+The built-in profiles map to the existing Gemini Live prebuilt voices. `normal` remains compatible with the existing Settings voice picker; the other profiles provide explicit named presets.
+
+## Notification intelligence
+
+Notification intelligence stores its local preference state in:
+
+```text
+memory/notification_preferences.json
+```
+
+Quiet mode suppresses ordinary/important notification interruptions for a chosen period while allowing critical alerts to pass through.
