@@ -56,6 +56,16 @@ This roadmap describes the current project state and the next engineering priori
 - live content panel
 - privacy overlay
 
+
+## Newly implemented on this branch
+
+The following source changes are now present on `mark-43-context-automation`; they should receive local Windows runtime validation before being treated as fully verified:
+
+- Resource Manager
+- Local Ollama model router and one-shot fallback
+- Named JARVIS voice profiles
+- Notification intelligence and intelligent interruption gating
+
 ## Immediate next priorities
 
 ### 1. Desktop window UX
