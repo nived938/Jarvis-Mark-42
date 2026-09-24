@@ -745,6 +745,21 @@ def _is_reconnect_signal(exc: BaseException) -> bool:
 
 
 def _keep_context_of(exc: BaseException) -> bool:
+def _is_live_internal_error(exc: BaseException) -> bool:
+    """True when a Live-session failure is the Gemini 1011 server-side close.
+
+    TaskGroup wraps child failures in ExceptionGroup/BaseExceptionGroup, so the
+    check must recurse instead of looking only at str(group).
+    """
+    text = str(exc)
+    if "1011" in text or "Internal error encountered" in text:
+        return True
+    children = getattr(exc, "exceptions", None)
+    if children:
+        return any(_is_live_internal_error(child) for child in children)
+    return False
+
+
     """Read `keep_context` off a reconnect signal, unwrapping the group the
     TaskGroup put it in. Defaults to True: an unexpected shape must not silently
     wipe the conversation."""
@@ -2887,6 +2902,7 @@ class JarvisLive:
         """Forward phone mic PCM chunks from dashboard queue into the Gemini Live session."""
         q = self._dashboard._phone_audio_queue
         while True:
+            _transport_retry_delay = None
             try:
                 chunk = await asyncio.wait_for(q.get(), timeout=1.0)
             except asyncio.TimeoutError:
@@ -3008,6 +3024,8 @@ class JarvisLive:
                     self._interrupted          = False
 
                     print("[JARVIS] Connected.")
+                    # A successful session resets the transient transport backoff.
+                    self._conn_backoff = 3
                     if _resumed_with:
                         # Say it plainly: the difference between "it reconnected"
                         # and "it reconnected and still knows what we were doing"
@@ -3091,6 +3109,25 @@ class JarvisLive:
                     continue
 
                 err_str = str(e)
+
+                # Gemini Live can occasionally terminate the WebSocket with 1011
+                # ("Internal error encountered"). Treat this as a transient
+                # transport failure, not as a sleep request. ExceptionGroups from
+                # the TaskGroup are unwrapped by _is_live_internal_error().
+                if _is_live_internal_error(e):
+                    _retry_delay = max(3, int(getattr(self, "_conn_backoff", 3)))
+                    _transport_retry_delay = _retry_delay
+                    self._conn_backoff = min(_retry_delay * 2, 60)
+                    self.ui.write_log(
+                        f"NET: Gemini Live interrupted (1011). "
+                        f"Recovering in {_retry_delay}s."
+                    )
+                    print(
+                        f"[JARVIS] ⚠️ Live connection interrupted (1011). "
+                        f"Retrying in {_retry_delay}s."
+                    )
+                    continue
+
                 print(f"[JARVIS] Error ({type(e).__name__}): {e}")
                 traceback.print_exc()
 
@@ -3154,6 +3191,13 @@ class JarvisLive:
                 # Only save if there was a real conversation (≥3 turns)
                 if len(self._session_log) >= 3:
                     asyncio.create_task(self._save_session_summary())
+
+            if _transport_retry_delay is not None:
+                # Keep the HUD out of the normal sleep state while the Live
+                # transport is automatically recovering from a transient 1011.
+                self.set_speaking(False)
+                await asyncio.sleep(_transport_retry_delay)
+                continue
 
             self.set_speaking(False)
             self.ui.set_state("SLEEPING")
