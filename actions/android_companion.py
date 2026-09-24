@@ -14,6 +14,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from core import confirm as confirm_gate
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 SCREEN_DIR = BASE_DIR / "memory" / "android_screens"
 
@@ -237,19 +239,37 @@ def _handler(parameters, player=None, **_):
         apk = _safe_local_path(parameters.get("path", ""))
         if not apk.is_file():
             return f"APK not found: {apk}"
-        ok, out = _run(
-            [*_device_arg(serial), "install", "-r", str(apk)],
-            timeout=90,
+
+        def _install() -> str:
+            ok, out = _run(
+                [*_device_arg(serial), "install", "-r", str(apk)],
+                timeout=90,
+            )
+            return out or ("APK installed." if ok else "APK installation failed.")
+
+        return confirm_gate.request(
+            "android-install",
+            "Install Android application",
+            f"Install this APK on the connected phone? {apk.name}",
+            _install,
         )
-        return out or ("APK installed." if ok else "APK installation failed.")
 
     if action == "uninstall":
         package = _safe_package(parameters.get("package", ""))
-        ok, out = _run(
-            [*_device_arg(serial), "uninstall", package],
-            timeout=30,
+
+        def _uninstall() -> str:
+            ok, out = _run(
+                [*_device_arg(serial), "uninstall", package],
+                timeout=30,
+            )
+            return out or (f"Uninstalled {package}." if ok else f"Could not uninstall {package}.")
+
+        return confirm_gate.request(
+            "android-uninstall",
+            "Uninstall Android application",
+            f"Remove the application '{package}' from the connected phone?",
+            _uninstall,
         )
-        return out or (f"Uninstalled {package}." if ok else f"Could not uninstall {package}.")
 
     # ---- navigation / input ------------------------------------------------
     if action == "key":
