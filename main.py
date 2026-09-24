@@ -745,6 +745,18 @@ def _is_reconnect_signal(exc: BaseException) -> bool:
 
 
 def _keep_context_of(exc: BaseException) -> bool:
+    """Read `keep_context` off a reconnect signal, unwrapping the group the
+    TaskGroup put it in. Defaults to True: an unexpected shape must not silently
+    wipe the conversation."""
+    if isinstance(exc, _ReconnectSignal):
+        return getattr(exc, "keep_context", True)
+    if isinstance(exc, BaseExceptionGroup):
+        for sub in exc.exceptions:
+            if _is_reconnect_signal(sub):
+                return _keep_context_of(sub)
+    return True
+
+
 def _is_live_internal_error(exc: BaseException) -> bool:
     """True when a Live-session failure is the Gemini 1011 server-side close.
 
@@ -758,18 +770,6 @@ def _is_live_internal_error(exc: BaseException) -> bool:
     if children:
         return any(_is_live_internal_error(child) for child in children)
     return False
-
-
-    """Read `keep_context` off a reconnect signal, unwrapping the group the
-    TaskGroup put it in. Defaults to True: an unexpected shape must not silently
-    wipe the conversation."""
-    if isinstance(exc, _ReconnectSignal):
-        return getattr(exc, "keep_context", True)
-    if isinstance(exc, BaseExceptionGroup):
-        for sub in exc.exceptions:
-            if _is_reconnect_signal(sub):
-                return _keep_context_of(sub)
-    return True
 
 
 class JarvisLive:
@@ -2996,6 +2996,7 @@ class JarvisLive:
             self._dashboard = None
 
         while True:
+            _transport_retry_delay = None
             try:
                 print("[JARVIS] Connecting...")
                 self.ui.set_state("THINKING")
