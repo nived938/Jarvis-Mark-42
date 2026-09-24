@@ -888,6 +888,7 @@ class JarvisLive:
         self._resume_handle: str | None = None
         self._turn_done_event: asyncio.Event | None = None
         self._transport_retry_delay: float | None = None
+        self._consecutive_1011 = 0
         self._dashboard     = None
         self._briefing_sent    = False          # morning briefing fires once per process
         self._sys_monitor      = SystemMonitor()  # persistent cooldown state
@@ -3402,10 +3403,9 @@ class JarvisLive:
                 config = self._build_config()
 
                 # Fresh client on every reconnect — avoids stale HTTP session state.
-                client = genai.Client(
-                    api_key=_get_api_key(),
-                    http_options={"api_version": "v1alpha" if self._enhanced_live else "v1beta"}
-                )
+                # Use the SDK's current default API version instead of pinning JARVIS
+                # to an older Live backend revision.
+                client = genai.Client(api_key=_get_api_key())
 
                 async with (
                     client.aio.live.connect(model=LIVE_MODEL, config=config) as session,
@@ -3423,8 +3423,9 @@ class JarvisLive:
                     self._interrupted          = False
 
                     print("[JARVIS] Connected.")
-                    # A successful session resets the transient transport backoff.
+                    # A successful session resets all transient transport recovery state.
                     self._conn_backoff = 3
+                    self._consecutive_1011 = 0
                     if _resumed_with:
                         # Say it plainly: the difference between "it reconnected"
                         # and "it reconnected and still knows what we were doing"
@@ -3514,17 +3515,33 @@ class JarvisLive:
                 # transport failure, not as a sleep request. ExceptionGroups from
                 # the TaskGroup are unwrapped by _is_live_internal_error().
                 if _is_live_internal_error(e):
-                    _retry_delay = max(3, int(getattr(self, "_conn_backoff", 3)))
+                    self._consecutive_1011 += 1
+
+                    # Do not replay the same potentially-broken resumption/config
+                    # forever. After three consecutive 1011s, drop the resumption
+                    # handle and reconnect with only the minimal Live configuration.
+                    if self._consecutive_1011 >= 3:
+                        self._resume_handle = None
+                        self._enhanced_live = False
+                        self._tuned_live = False
+                        self.ui.write_log(
+                            "NET: Gemini Live returned repeated 1011 errors; "
+                            "resetting the session and using the minimal Live configuration."
+                        )
+
+                    _retry_delay = max(5, int(getattr(self, "_conn_backoff", 5)))
                     self._transport_retry_delay = _retry_delay
                     self._conn_backoff = min(_retry_delay * 2, 60)
-                    self.ui.write_log(
-                        f"NET: Gemini Live interrupted (1011). "
-                        f"Recovering in {_retry_delay}s."
-                    )
-                    print(
-                        f"[JARVIS] ⚠️ Live connection interrupted (1011). "
-                        f"Retrying in {_retry_delay}s."
-                    )
+
+                    if self._consecutive_1011 == 1 or self._consecutive_1011 >= 3:
+                        self.ui.write_log(
+                            f"NET: Gemini Live interrupted (1011). "
+                            f"Retrying in {_retry_delay}s."
+                        )
+                        print(
+                            f"[JARVIS] ⚠️ Gemini Live 1011 — retrying in {_retry_delay}s "
+                            f"(consecutive {self._consecutive_1011})."
+                        )
                     continue
 
                 print(f"[JARVIS] Error ({type(e).__name__}): {e}")
