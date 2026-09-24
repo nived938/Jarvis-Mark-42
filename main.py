@@ -712,8 +712,16 @@ def _hud_result_payload(name: str, args: dict, result: str) -> tuple[str, str, b
             title += f" • {receiver[:24]}"
         return title, text, False
 
+    if name == "android_companion":
+        action = str(args.get("action", "") or "").lower()
+        # Starting/stopping the cast has already opened/closed the dedicated
+        # Android HUD. Do not replace it with the generic result viewer.
+        if action in {"cast", "cast_start", "cast_stop", "mirror", "mirror_stop", "cast_status"}:
+            return None
+        return f"ANDROID • {action.upper() or 'STATUS'}", text, False
+
     if name in {"download_organizer", "habit_learning", "environment_doctor",
-                "storage_cleanup", "hardware_health", "android_companion"}:
+                "storage_cleanup", "hardware_health"}:
         action = str(args.get("action", "STATUS") or "STATUS").upper()
         label_map = {
             "download_organizer": "DOWNLOAD ORGANIZER",
@@ -721,7 +729,6 @@ def _hud_result_payload(name: str, args: dict, result: str) -> tuple[str, str, b
             "environment_doctor": "ENVIRONMENT DOCTOR",
             "storage_cleanup": "STORAGE CLEANUP",
             "hardware_health": "HARDWARE HEALTH",
-            "android_companion": "ANDROID COMPANION",
         }
         return f"{label_map[name]} • {action}", text, False
 
