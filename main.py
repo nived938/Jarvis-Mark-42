@@ -1351,6 +1351,7 @@ class JarvisLive:
         if self.ui.is_geo_maps_hud_open() and low in {
             "where am i",
             "where i am",
+            "where is my location",
             "where am i now",
             "my location",
             "show my location",
@@ -1651,6 +1652,42 @@ class JarvisLive:
             )
             return True
 
+        # Compound map commands must be handled before the generic
+        # "open <app>" path. This prevents Windows app search from receiving
+        # phrases such as "open map and search for ...".
+        compound_map_match = _re.fullmatch(
+            r"(?:open|show)\s+(?:geoapify\s+)?maps?\s+and\s+search\s+for\s+(.+)",
+            low, flags=_re.IGNORECASE,
+        )
+        if compound_map_match:
+            query = compound_map_match.group(1).strip()
+            try:
+                self.ui.show_geoapify_maps(query)
+                self.ui.write_log(f"SYS: Geoapify Maps HUD search — {query}")
+                self.speak(f"Sir, I opened the map and searched for {query}.")
+            except Exception as exc:
+                self.ui.write_log(f"ERR: Geoapify Maps compound command failed — {exc}")
+                self.speak("Sir, I couldn't open the Geoapify Maps HUD.")
+            return True
+
+        # Manual map location is deliberately local. The user clicks the map,
+        # so JARVIS never guesses the exact point.
+        if low in {
+            "set my location",
+            "set my map location",
+            "set location on map",
+            "set my location on map",
+            "choose my location",
+        }:
+            try:
+                self.ui.set_geoapify_location()
+                self.ui.write_log("SYS: Waiting for the user to click their location on the map.")
+                self.speak("Okay, sir. Click on the map where your location is.")
+            except Exception as exc:
+                self.ui.write_log(f"ERR: Could not enter map location mode — {exc}")
+                self.speak("Sir, I couldn't enable map location selection.")
+            return True
+
         # Maps are a direct HUD capability. Do not route the explicit local
         # command through the action registry: the HUD must open even if the
         # discoverable action is unavailable or loaded with a different context.
@@ -1669,6 +1706,21 @@ class JarvisLive:
             except Exception as exc:
                 self.ui.write_log(f"ERR: Geoapify Maps HUD failed — {exc}")
                 self.speak("Sir, I couldn't open the Geoapify Maps HUD.")
+            return True
+
+        map_plain_match = _re.fullmatch(
+            r"(?:search|find|look up)\s+(.+?)\s+(?:on|in)\s+(?:the\s+)?map",
+            low, flags=_re.IGNORECASE,
+        )
+        if map_plain_match:
+            query = map_plain_match.group(1).strip()
+            try:
+                self.ui.show_geoapify_maps(query)
+                self.ui.write_log(f"SYS: Geoapify Maps HUD search — {query}")
+                self.speak(f"Sir, I searched the map for {query}.")
+            except Exception as exc:
+                self.ui.write_log(f"ERR: Geoapify Maps search failed — {exc}")
+                self.speak("Sir, I couldn't search the map.")
             return True
 
         map_match = _re.fullmatch(
