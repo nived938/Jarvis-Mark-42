@@ -3911,6 +3911,49 @@ class GeoapifyMapsHudView(QWidget):
         self.closed.emit()
 
 
+class WindowHeader(QWidget):
+    """Custom frameless-window title bar with drag support."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._drag_origin = None
+        self.setMouseTracking(True)
+        self.setObjectName("windowHeader")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            window = self.window()
+            if window is not None and not window.isMaximized():
+                self._drag_origin = (
+                    event.globalPosition().toPoint() - window.frameGeometry().topLeft()
+                )
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_origin is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            window = self.window()
+            if window is not None and not window.isMaximized():
+                window.move(event.globalPosition().toPoint() - self._drag_origin)
+                event.accept()
+                return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_origin = None
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            window = self.window()
+            if window is not None and hasattr(window, "_toggle_maximize"):
+                window._toggle_maximize()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+
 class MainWindow(QMainWindow):
     _log_sig        = pyqtSignal(str)
     _state_sig      = pyqtSignal(str)
@@ -3945,7 +3988,17 @@ class MainWindow(QMainWindow):
 
     def __init__(self, face_path: str):
         super().__init__()
+
+        # Remove the Windows/macOS/Linux native title bar. JARVIS owns its
+        # minimize, maximize/restore, and close controls in the HUD header.
+        self.setWindowFlags(
+            Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+
         self._face_path = face_path
+        self._window_max_btn = None
+        self._window_control_btns = []
 
         # Load customization from config
         _cfg = _read_full_config()
@@ -5051,7 +5104,7 @@ class MainWindow(QMainWindow):
 
 
     def _build_header(self) -> QWidget:
-        w = QWidget()
+        w = WindowHeader()
         w.setFixedHeight(54)
         w.setStyleSheet(f"background: {C.DARK}; border-bottom: 1px solid {C.BORDER_B};")
         lay = QHBoxLayout(w)
@@ -5102,6 +5155,7 @@ class MainWindow(QMainWindow):
         mid = QVBoxLayout(); mid.setSpacing(1)
         _disp = self._assistant_name.upper()
         self._title_lbl = QLabel(_disp)
+        self._title_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._title_lbl.setFont(QFont("Courier New", 17, QFont.Weight.Bold))
         self._title_lbl.setStyleSheet(f"color: {C.PRI}; background: transparent;")
@@ -5110,6 +5164,7 @@ class MainWindow(QMainWindow):
                      if _disp in ("JARVIS", "J.A.R.V.I.S")
                      else "Personal AI Assistant")
         self._sub_lbl = QLabel(_sub_text)
+        self._sub_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._sub_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._sub_lbl.setFont(QFont("Courier New", 7))
         self._sub_lbl.setStyleSheet(f"color: {C.PRI_DIM}; background: transparent;")
@@ -5129,7 +5184,80 @@ class MainWindow(QMainWindow):
         self._date_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
         right_col.addWidget(self._date_lbl)
         lay.addLayout(right_col)
+
+        # Native title-bar buttons are gone with FramelessWindowHint. These
+        # controls deliberately live inside the JARVIS header so they remain
+        # available even when the window is maximized.
+        controls = QHBoxLayout()
+        controls.setContentsMargins(8, 0, 0, 0)
+        controls.setSpacing(4)
+
+        def _window_button(text: str, tooltip: str, callback, accent=None):
+            btn = QPushButton(text)
+            btn.setFixedSize(30, 26)
+            btn.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            color = accent or C.TEXT_DIM
+            hover = C.PRI if accent is None else accent
+            btn.setToolTip(tooltip)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    color: {color};
+                    background: transparent;
+                    border: 1px solid {C.BORDER};
+                    border-radius: 4px;
+                    padding: 0;
+                }}
+                QPushButton:hover {{
+                    color: {hover};
+                    border-color: {hover};
+                    background: {C.PRI_GHO};
+                }}
+            """)
+            btn.clicked.connect(callback)
+            self._window_control_btns.append(btn)
+            controls.addWidget(btn)
+            return btn
+
+        _window_button("—", "Minimize JARVIS", self.showMinimized)
+        self._window_max_btn = _window_button("□", "Maximize JARVIS", self._toggle_maximize)
+        _window_button("✕", "Close JARVIS", self.close, C.RED)
+
+        lay.addLayout(controls)
         return w
+
+    def _toggle_maximize(self):
+        if self.isMaximized():
+            self.showNormal()
+            self._update_window_controls()
+            self._center_window()
+        else:
+            self.showMaximized()
+            self._update_window_controls()
+
+    def _update_window_controls(self):
+        if self._window_max_btn is None:
+            return
+        maximized = self.isMaximized()
+        self._window_max_btn.setText("❐" if maximized else "□")
+        self._window_max_btn.setToolTip(
+            "Restore JARVIS" if maximized else "Maximize JARVIS"
+        )
+
+    def _center_window(self):
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        self.move(
+            area.left() + max(0, (area.width() - self.width()) // 2),
+            area.top() + max(0, (area.height() - self.height()) // 2),
+        )
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == event.Type.WindowStateChange:
+            self._update_window_controls()
 
     def _tick_clock(self):
         self._clock_lbl.setText(time.strftime("%H:%M:%S"))
@@ -6774,6 +6902,8 @@ class JarvisUI:
         self._win = MainWindow(face_path)
         self.root = _RootShim(self._app)
         self._win.show()
+        self._win.showMaximized()
+        self._win._update_window_controls()
 
     @property
     def muted(self) -> bool:
