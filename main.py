@@ -620,6 +620,7 @@ TOOL_DECLARATIONS = [
 ]
 
 _HUD_RESULT_TOOLS = {
+    "system_status",
     "gmail_manager",
     "calender_manager",
     "send_message",
@@ -680,6 +681,9 @@ def _hud_result_payload(name: str, args: dict, result: str) -> tuple[str, str, b
     text = str(result or "").strip()
     if not text:
         return None
+
+    if name == "system_status":
+        return "SYSTEM STATUS", text, False
 
     if name == "gmail_manager":
         action = str(args.get("action", "latest") or "latest").upper()
@@ -1323,6 +1327,116 @@ class JarvisLive:
         ):
             self.ui.stop_camera_stream()
             self.ui.write_log("SYS: Camera HUD closed.")
+            return True
+
+        # Resource commands are local and always open the center result HUD.
+        if low in {
+            "show my resource usage",
+            "show resource usage",
+            "show system resources",
+        }:
+            result = self._run_local_action("resource_manager", {"action": "analyze"})
+            self.ui.show_content("RESOURCE • ANALYSIS", result)
+            return True
+
+        if low in {
+            "what is using the most ram",
+            "what is using most ram",
+            "which app is using the most ram",
+        }:
+            result = self._run_local_action("resource_manager", {"action": "top_memory", "limit": 10})
+            self.ui.show_content("RESOURCE • TOP RAM", result)
+            return True
+
+        if low in {
+            "what is using the most cpu",
+            "what is using most cpu",
+            "which app is using the most cpu",
+        }:
+            result = self._run_local_action("resource_manager", {"action": "top_cpu", "limit": 10})
+            self.ui.show_content("RESOURCE • TOP CPU", result)
+            return True
+
+        if low in {
+            "analyze my computer performance",
+            "analyze computer performance",
+            "analyze my pc performance",
+        }:
+            result = self._run_local_action("resource_manager", {"action": "analyze"})
+            self.ui.show_content("RESOURCE • PERFORMANCE", result)
+            return True
+
+        # Voice profile commands are local so profile lists and voice changes
+        # immediately appear in the same center HUD.
+        if low in {
+            "show my voice profiles",
+            "show voice profiles",
+            "list voice profiles",
+        }:
+            result = self._run_local_action("voice_profiles", {"action": "list"})
+            self.ui.show_content("VOICE • PROFILES", result)
+            return True
+
+        voice_match = _re.fullmatch(
+            r"(?:switch|change|set) (?:to )?(normal|calm|energetic|deep|bright)(?: voice)?",
+            low,
+        )
+        if voice_match:
+            profile = voice_match.group(1)
+            result = self._run_local_action("voice_profiles", {"action": "set", "profile": profile})
+            self.ui.show_content(f"VOICE • {profile.upper()}", result)
+            return True
+
+        # Notification commands are local and always surface their current state
+        # in the center HUD.
+        if low in {
+            "what notifications do i have",
+            "show my notifications",
+            "show notifications",
+        }:
+            result = self._run_local_action("notification_intelligence", {"action": "summary"})
+            self.ui.show_content("NOTIFICATIONS • SUMMARY", result)
+            return True
+
+        if low in {
+            "show important notifications",
+            "show important notification",
+        }:
+            result = self._run_local_action("notification_intelligence", {"action": "important"})
+            self.ui.show_content("NOTIFICATIONS • IMPORTANT", result)
+            return True
+
+        if low in {
+            "give me a notification digest",
+            "show notification digest",
+            "notification digest",
+        }:
+            result = self._run_local_action("notification_intelligence", {"action": "digest"})
+            self.ui.show_content("NOTIFICATIONS • DIGEST", result)
+            return True
+
+        quiet_match = _re.fullmatch(
+            r"enable notification quiet mode for (\d+) minutes?",
+            low,
+        )
+        if quiet_match:
+            minutes = max(1, min(int(quiet_match.group(1)), 1440))
+            result = self._run_local_action(
+                "notification_intelligence",
+                {"action": "quiet", "mode": "on", "minutes": minutes},
+            )
+            self.ui.show_content("NOTIFICATIONS • QUIET MODE", result)
+            return True
+
+        if low in {
+            "disable notification quiet mode",
+            "turn off notification quiet mode",
+        }:
+            result = self._run_local_action(
+                "notification_intelligence",
+                {"action": "quiet", "mode": "off"},
+            )
+            self.ui.show_content("NOTIFICATIONS • QUIET MODE", result)
             return True
 
         # Local AI controls are kept local so the HUD picker is immediate.
