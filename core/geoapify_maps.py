@@ -260,7 +260,7 @@ def search(query: str, lat: float, lon: float) -> dict[str, Any]:
         for key in sorted(_CATEGORY_MAP, key=len, reverse=True):
             cleaned = re.sub(rf"\b{re.escape(key)}\b", " ", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        if cleaned:
+        if cleaned and not near_me:
             hit = geocode(
                 cleaned,
                 limit=1,
