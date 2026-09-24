@@ -165,11 +165,94 @@ def route(start_lat: float, start_lon: float, end_lat: float, end_lon: float, mo
     params = urllib.parse.urlencode({
         "waypoints": f"{start_lat},{start_lon}|{end_lat},{end_lon}",
         "mode": mode or "drive",
+        "type": "balanced",
+        "traffic": "free_flow",
         "format": "json",
         "details": "instruction_details",
         "apiKey": _api_key(),
     })
     return _request_json(f"https://api.geoapify.com/v1/routing?{params}")
+
+
+def route_between_places(start_text: str, end_text: str) -> dict[str, Any]:
+    """Geocode two places and calculate a driving route between them.
+
+    Geoapify's balanced routing considers time, distance and cost; free-flow
+    traffic gives the router its normal optimistic driving-time estimate.
+    """
+    start_text = str(start_text or "").strip()
+    end_text = str(end_text or "").strip()
+    if not start_text or not end_text:
+        raise ValueError("Both route locations are required.")
+
+    bias = saved_location()
+    bias_lat = bias_lon = None
+    if bias:
+        bias_lat, bias_lon = bias["lat"], bias["lon"]
+
+    start_hits = geocode(
+        start_text,
+        limit=5,
+        bias_lat=bias_lat,
+        bias_lon=bias_lon,
+    )
+    end_hits = geocode(
+        end_text,
+        limit=5,
+        bias_lat=bias_lat,
+        bias_lon=bias_lon,
+    )
+    if not start_hits:
+        raise RuntimeError(f"Could not find the starting location: {start_text}")
+    if not end_hits:
+        raise RuntimeError(f"Could not find the destination: {end_text}")
+
+    start = start_hits[0]
+    end = end_hits[0]
+
+    params = urllib.parse.urlencode({
+        "waypoints": f"{start['lat']},{start['lon']}|{end['lat']},{end['lon']}",
+        "mode": "drive",
+        "type": "balanced",
+        "traffic": "free_flow",
+        "format": "geojson",
+        "details": "instruction_details",
+        "apiKey": _api_key(),
+    })
+    route_payload = _request_json(
+        f"https://api.geoapify.com/v1/routing?{params}"
+    )
+
+    distance_m = None
+    time_s = None
+    for obj in (
+        route_payload if isinstance(route_payload, dict) else {},
+        *((route_payload.get("features") or []) if isinstance(route_payload, dict) else []),
+        *((route_payload.get("results") or []) if isinstance(route_payload, dict) else []),
+    ):
+        if not isinstance(obj, dict):
+            continue
+        props = obj.get("properties") if isinstance(obj.get("properties"), dict) else obj
+        if distance_m is None and props.get("distance") is not None:
+            try:
+                distance_m = float(props["distance"])
+            except (TypeError, ValueError):
+                pass
+        if time_s is None and props.get("time") is not None:
+            try:
+                time_s = float(props["time"])
+            except (TypeError, ValueError):
+                pass
+        if distance_m is not None and time_s is not None:
+            break
+
+    return {
+        "route": route_payload,
+        "from": start,
+        "to": end,
+        "distance_m": distance_m,
+        "time_s": time_s,
+    }
 
 def _category_for_query(query: str) -> str | None:
     low = re.sub(r"\s+", " ", str(query or "").strip().lower())
@@ -458,6 +541,12 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(200,search((q.get("q") or [""])[0],float((q.get("lat") or ["20"])[0]),float((q.get("lon") or ["78"])[0]))); return
             if path=="/api/route":
                 self._json(200,route(float((q.get("slat") or ["0"])[0]),float((q.get("slon") or ["0"])[0]),float((q.get("elat") or ["0"])[0]),float((q.get("elon") or ["0"])[0]),str((q.get("mode") or ["drive"])[0]))); return
+            if path=="/api/route-between":
+                start_text = (q.get("from") or [""])[0]
+                end_text = (q.get("to") or [""])[0]
+                result = route_between_places(start_text, end_text)
+                self._json(200, result)
+                return
             self._json(404,{"error":"Not found"})
         except Exception as exc:
             self._json(500,{"error":str(exc)})
