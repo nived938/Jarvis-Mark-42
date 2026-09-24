@@ -44,7 +44,7 @@ def _prefs() -> dict:
     return {
         "quiet_mode": False,
         "quiet_until": 0.0,
-        "interrupt_min_priority": 4,
+        "interrupt_min_priority": 3,
     }
 
 
