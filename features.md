@@ -195,3 +195,12 @@ These should not be reintroduced accidentally while documenting or extending the
 - Notification digests and unread summaries
 - Quiet mode with critical-alert bypass
 - Intelligent gating for background/system notifications before they interrupt a Live conversation
+
+## HUD interaction
+
+- Camera opens as the persistent center HUD camera view
+- Weather opens as the temporary center HUD weather view
+- Resource, Local AI, voice-profile, and notification results open in the center result HUD
+- Local AI has an interactive center-HUD model picker with Up/Down navigation and Enter selection
+- The selected Local AI model is persisted locally
+- `close`, `close it`, `close that`, `close this`, `hide`, `dismiss`, `go back`, and related phrases close the active temporary center HUD
