@@ -868,6 +868,7 @@ class JarvisLive:
         self.ui.on_emergency_kill = self.emergency_kill
         self.ui.on_voice_change   = self._on_voice_change     # voice picker → rebuild session
         self.ui.on_audio_device_change = self._on_audio_device_change
+        self.ui.on_timer_finished = self._on_timer_finished
         self._reconnect_event: asyncio.Event | None = None
         self._reconnect_keep = True   # False → next rebuild drops the resumption handle
 
@@ -1852,7 +1853,12 @@ class JarvisLive:
             "show the camera",
             "camera on",
         )
-        if low in camera_open_phrases:
+        camera_compound = bool(_re.fullmatch(
+            r"(?:open|start|show|turn on)\s+(?:the\s+)?camera\s+and\s+.+",
+            low,
+            flags=_re.IGNORECASE,
+        ))
+        if low in camera_open_phrases or camera_compound:
             if self.ui.is_camera_hud_open():
                 self.ui.write_log("SYS: Camera HUD is already open.")
             else:
@@ -1892,6 +1898,13 @@ class JarvisLive:
                 "focus": "focus",
             }.get(verb)
             if action and app_name:
+                # "camera" is a JARVIS HUD capability. Only an explicit
+                # "camera app" request should be routed to Windows.
+                if (
+                    verb == "open"
+                    and app_name.casefold() in {"camera", "the camera"}
+                ):
+                    return self._queue_local_command("open camera")
                 result = self._run_local_action(
                     "app_screen_manager",
                     {"action": action, "app": app_name},
@@ -1971,6 +1984,48 @@ class JarvisLive:
                 "weather_report",
                 {"city": city, "report": report, "days": 5, "_speak_result": True},
             )
+            return True
+
+        # Countdown timers are local and non-blocking. They update a small
+        # box at the top-left of the JARVIS HUD and disappear automatically at zero.
+        timer_match = _re.search(
+            r"(?:set|start|begin|create)\s+(?:a\s+)?(?:timer\s+)?for\s+(?P<duration>.+?)\s+timer$",
+            low,
+            flags=_re.IGNORECASE,
+        ) or _re.search(
+            r"(?:set|start|begin|create)\s+(?:a\s+)?(?P<duration>\d+(?:\.\d+)?\s*(?:seconds?|secs?|s|minutes?|mins?|min|m|hours?|hrs?|hr|h))\s+timer$",
+            low,
+            flags=_re.IGNORECASE,
+        ) or _re.search(
+            r"(?:set|start|begin|create)\s+(?:a\s+)?timer\s+for\s+(?P<duration>\d+(?:\.\d+)?\s*(?:seconds?|secs?|s|minutes?|mins?|min|m|hours?|hrs?|hr|h))$",
+            low,
+            flags=_re.IGNORECASE,
+        ) or _re.search(
+            r"timer\s+for\s+(?P<duration>\d+(?:\.\d+)?\s*(?:seconds?|secs?|s|minutes?|mins?|min|m|hours?|hrs?|hr|h))$",
+            low,
+            flags=_re.IGNORECASE,
+        )
+        if timer_match:
+            duration = timer_match.group("duration").strip()
+            result = self._run_local_action(
+                "timer",
+                {"action": "start", "duration": duration},
+            )
+            if result.lower().startswith("timer set for"):
+                self.speak(f"Sir, timer set for {duration}.")
+            else:
+                self.speak("Sir, I couldn't start that timer.")
+            return True
+
+        if low in {
+            "cancel timer",
+            "stop timer",
+            "clear timer",
+            "cancel the timer",
+            "stop the timer",
+        }:
+            self._run_local_action("timer", {"action": "cancel"})
+            self.speak("Sir, the timer has been cancelled.")
             return True
 
         # Local stopwatch controls: no Gemini round trip is needed for timing.
@@ -2067,6 +2122,13 @@ class JarvisLive:
 
             self.ui.write_log(f"SYS: {result}")
             result_text = str(result)
+
+            if name == "stopwatch":
+                action = str(args.get("action") or "").strip().lower()
+                if action in {"start", "resume"}:
+                    self.ui.start_stopwatch_hud()
+                elif action in {"pause", "stop", "reset"}:
+                    self.ui.stop_stopwatch_hud()
 
             if name == "weather_report" and args.get("_speak_result"):
                 # Local weather bypasses Gemini's normal user-turn path, so
@@ -2242,6 +2304,13 @@ class JarvisLive:
         if self._turn_done_event:
             self._turn_done_event.clear()
         self.ui.write_log("SYS: Interrupted — listening...")
+
+    def _on_timer_finished(self, kind: str = "timer") -> None:
+        """Announce countdown completion after the HUD timer reaches zero."""
+        if str(kind or "timer").lower() != "timer":
+            return
+        self.ui.write_log("SYS: Timer finished.")
+        self.speak("Sir, the timer has ended.")
 
     def speak(self, text: str):
         if emergency_stop.is_active():
