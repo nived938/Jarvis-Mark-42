@@ -13,6 +13,9 @@ import psutil
 BASE_DIR = Path(__file__).resolve().parent.parent
 HISTORY_FILE = BASE_DIR / "memory" / "network_quality_history.json"
 MAX_HISTORY = 40
+_MONITOR_THREAD = None
+_MONITOR_STOP = None
+_LAST_MONITOR_QUALITY = None
 
 
 def _tcp_probe(host: str, port: int = 443, timeout: float = 3.0) -> tuple[bool, float, str]:
@@ -147,10 +150,87 @@ def _format(data: dict) -> str:
     return "\n".join(lines)
 
 
-def _handler(parameters=None, **_):
+def _monitor_loop(player=None, interval: int = 60) -> None:
+    global _LAST_MONITOR_QUALITY
+    while _MONITOR_STOP is not None and not _MONITOR_STOP.wait(max(20, int(interval))):
+        try:
+            data = snapshot(probes=2)
+            _save_history(data)
+            quality = _quality(
+                data.get("avg_latency_ms"),
+                float(data.get("packet_loss_percent") or 0),
+                bool(data.get("https_ok")),
+                bool(data.get("dns_ok")),
+            )
+            degraded = (
+                quality != _LAST_MONITOR_QUALITY
+                or not data.get("https_ok")
+                or float(data.get("packet_loss_percent") or 0) > 0
+            )
+            _LAST_MONITOR_QUALITY = quality
+            if degraded and player is not None:
+                message = _format(data)
+                try:
+                    player.write_log(
+                        f"SYS: Network monitor — quality {quality.lower()}, "
+                        f"latency {data.get('avg_latency_ms', 'N/A')} ms, "
+                        f"loss {data.get('packet_loss_percent', 'N/A')}%."
+                    )
+                except Exception:
+                    pass
+                # Only surface the HUD for a degraded/change event; normal
+                # periodic samples remain quiet.
+                if quality in {"FAIR", "POOR"} or not data.get("https_ok"):
+                    try:
+                        player.show_content("NETWORK • MONITOR ALERT", message)
+                    except Exception:
+                        pass
+        except Exception as exc:
+            try:
+                if player is not None:
+                    player.write_log(f"ERR: Network monitor check failed — {exc}")
+            except Exception:
+                pass
+
+
+def _start_monitor(player=None, interval: int = 60) -> str:
+    global _MONITOR_THREAD, _MONITOR_STOP
+    if _MONITOR_THREAD is not None and _MONITOR_THREAD.is_alive():
+        return "Network quality monitor is already running."
+    import threading
+    _MONITOR_STOP = threading.Event()
+    _MONITOR_THREAD = threading.Thread(
+        target=_monitor_loop,
+        args=(player, interval),
+        daemon=True,
+        name="network-quality-monitor",
+    )
+    _MONITOR_THREAD.start()
+    return f"Network quality monitor started. Checks run every {max(20, int(interval))} seconds."
+
+
+def _stop_monitor() -> str:
+    global _MONITOR_THREAD, _MONITOR_STOP
+    if _MONITOR_STOP is not None:
+        _MONITOR_STOP.set()
+    _MONITOR_THREAD = None
+    _MONITOR_STOP = None
+    return "Network quality monitor stopped."
+
+
+def _handler(parameters=None, player=None, **_):
     p = parameters or {}
     action = str(p.get("action", "snapshot") or "snapshot").strip().lower()
     host = str(p.get("host", "1.1.1.1") or "1.1.1.1").strip()
+    if action == "start":
+        return _start_monitor(
+            player=player,
+            interval=int(p.get("interval", 60) or 60),
+        )
+
+    if action == "stop":
+        return _stop_monitor()
+
     if action in {"snapshot", "status", "check", "test"}:
         data = snapshot(host=host, probes=int(p.get("probes", 4) or 4))
         _save_history(data)
@@ -192,7 +272,7 @@ TOOL = {
     "parameters": {
         "type": "OBJECT",
         "properties": {
-            "action": {"type": "STRING", "description": "snapshot | status | check | test | history"},
+            "action": {"type": "STRING", "description": "snapshot | status | check | test | history | start | stop"},
             "host": {"type": "STRING", "description": "Probe target host, default 1.1.1.1"},
             "probes": {"type": "INTEGER", "description": "TCP probe count, 2-8"},
             "limit": {"type": "INTEGER", "description": "History rows, 1-20"},
