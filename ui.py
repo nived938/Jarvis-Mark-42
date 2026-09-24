@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QFrame, QGraphicsOpacityEffect,
     QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton,
     QScrollArea, QSizePolicy, QSplitter, QStackedWidget, QTextEdit,
-    QVBoxLayout, QWidget, QProgressBar,
+    QVBoxLayout, QWidget, QProgressBar, QListWidget,
 )
 
 try:
@@ -3394,6 +3394,172 @@ class HudResultView(QWidget):
         self.closed.emit()
 
 
+class LocalAIHudView(QWidget):
+    """Interactive Local AI model picker embedded in the center HUD.
+
+    The QListWidget supplies native Up/Down navigation plus Enter activation,
+    so the picker needs no custom keyboard event loop.
+    """
+
+    closed = pyqtSignal()
+    selected = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"background: {C.BG};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 14, 18, 14)
+        root.setSpacing(10)
+
+        hdr = QHBoxLayout()
+        hdr.setSpacing(8)
+
+        self._title = QLabel("◈  LOCAL AI")
+        self._title.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
+        self._title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        hdr.addWidget(self._title)
+        hdr.addStretch()
+
+        self._status = QLabel("LOADING")
+        self._status.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._status.setStyleSheet(
+            f"color: {C.GREEN}; background: rgba(0,255,136,14); "
+            f"border: 1px solid {C.GREEN_D}; border-radius: 4px; padding: 2px 6px;"
+        )
+        hdr.addWidget(self._status)
+
+        close = QPushButton("✕  CLOSE")
+        close.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setStyleSheet(f"""
+            QPushButton {{
+                color: {C.TEXT_DIM}; background: transparent;
+                border: 1px solid {C.BORDER}; border-radius: 4px;
+                padding: 4px 7px;
+            }}
+            QPushButton:hover {{ color: {C.PRI}; border-color: {C.PRI}; background: {C.PRI_GHO}; }}
+        """)
+        close.clicked.connect(self.close_view)
+        hdr.addWidget(close)
+        root.addLayout(hdr)
+
+        self._info = QLabel("")
+        self._info.setWordWrap(True)
+        self._info.setFont(QFont("Courier New", 8))
+        self._info.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+        root.addWidget(self._info)
+
+        self._list = QListWidget()
+        self._list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._list.setStyleSheet(f"""
+            QListWidget {{
+                background: rgba(0, 8, 14, 245);
+                color: {C.TEXT};
+                border: 1px solid {C.BORDER_B};
+                border-radius: 8px;
+                padding: 8px;
+                outline: none;
+            }}
+            QListWidget::item {{
+                padding: 10px 12px;
+                margin: 2px 0;
+                border: 1px solid transparent;
+                border-radius: 5px;
+            }}
+            QListWidget::item:selected {{
+                color: {C.WHITE};
+                background: {C.PRI_GHO};
+                border: 1px solid {C.PRI_DIM};
+            }}
+            QListWidget::item:hover {{
+                background: rgba(0, 31, 46, 180);
+                border: 1px solid {C.BORDER_B};
+            }}
+        """)
+        self._list.itemActivated.connect(self._select_current)
+        self._list.itemDoubleClicked.connect(self._select_current)
+        root.addWidget(self._list, stretch=1)
+
+        self._hint = QLabel("↑ ↓ choose model  •  Enter select  •  Esc / say “close” to return")
+        self._hint.setFont(QFont("Courier New", 7))
+        self._hint.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        root.addWidget(self._hint)
+
+        esc = QShortcut(QKeySequence("Escape"), self)
+        esc.activated.connect(self.close_view)
+
+    def set_models(
+        self,
+        models: list[str],
+        selected: str,
+        enabled: bool,
+        available: bool,
+    ) -> None:
+        self._list.clear()
+        selected = str(selected or "").strip()
+        models = [str(x).strip() for x in models if str(x).strip()]
+        models = sorted(dict.fromkeys(models), key=str.casefold)
+
+        state = "ENABLED" if enabled else "DISABLED"
+        reach = "ONLINE" if available else "OLLAMA OFFLINE"
+        self._status.setText(f"{state} • {reach}")
+
+        if selected and selected in models:
+            self._info.setText(
+                f"Selected model: <b>{selected}</b><br>"
+                "Arrow keys change the highlighted model. Press Enter to make it the preferred model."
+            )
+        elif selected:
+            self._info.setText(
+                f"Saved model <b>{selected}</b> is not installed. Select an installed model below."
+            )
+        else:
+            self._info.setText(
+                "No preferred model is selected. JARVIS will auto-select based on the task and available RAM."
+            )
+
+        if not models:
+            self._list.addItem("No Ollama models detected.")
+            self._list.setEnabled(False)
+            return
+
+        self._list.setEnabled(True)
+        selected_row = 0
+        for i, model in enumerate(models):
+            prefix = "●  " if model == selected else "○  "
+            self._list.addItem(prefix + model)
+            item = self._list.item(i)
+            item.setData(Qt.ItemDataRole.UserRole, model)
+            if model == selected:
+                selected_row = i
+
+        self._list.setCurrentRow(selected_row)
+        self._list.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _select_current(self, _item=None) -> None:
+        item = self._list.currentItem()
+        if item is None:
+            return
+        model = str(item.data(Qt.ItemDataRole.UserRole) or "").strip()
+        if not model:
+            return
+        self.selected.emit(model)
+        for row in range(self._list.count()):
+            current = self._list.item(row)
+            name = str(current.data(Qt.ItemDataRole.UserRole) or "").strip()
+            current.setText(("●  " if name == model else "○  ") + name)
+        self._status.setText("SELECTED")
+        self._info.setText(
+            f"Selected model: <b>{model}</b><br>"
+            "This is now JARVIS's preferred local AI model for normal text tasks."
+        )
+
+    def close_view(self) -> None:
+        self.closed.emit()
+
+
 class MainWindow(QMainWindow):
     _log_sig        = pyqtSignal(str)
     _state_sig      = pyqtSignal(str)
@@ -3416,6 +3582,7 @@ class MainWindow(QMainWindow):
     _review_sig     = pyqtSignal(str, str, object, object)  # document review payload
     _result_sig     = pyqtSignal(str, str, bool)
     _result_close_sig = pyqtSignal()
+    _local_ai_sig    = pyqtSignal(object)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -3518,17 +3685,22 @@ class MainWindow(QMainWindow):
         )
         _cam_v.addWidget(self._cam_live_lbl, stretch=1)
 
-        # Stack: 0 = animated HUD, 1 = live camera, 2 = full weather HUD
+        # Stack: 0 = animated HUD, 1 = live camera, 2 = full weather HUD,
+        #        3 = result HUD, 4 = Local AI picker
         self._weather_view = WeatherHudView()
         self._weather_view.closed.connect(self._on_weather_closed)
         self._result_hud = HudResultView()
         self._result_hud.closed.connect(self._close_result_hud)
+        self._local_ai_hud = LocalAIHudView()
+        self._local_ai_hud.closed.connect(self._close_local_ai_hud)
+        self._local_ai_hud.selected.connect(self._on_local_ai_selected)
 
         self._hud_cam_stack = QStackedWidget()
         self._hud_cam_stack.addWidget(self.hud)
         self._hud_cam_stack.addWidget(_cam_cont)
         self._hud_cam_stack.addWidget(self._weather_view)
         self._hud_cam_stack.addWidget(self._result_hud)
+        self._hud_cam_stack.addWidget(self._local_ai_hud)
 
         self._center_split = QSplitter(Qt.Orientation.Vertical)
         self._center_split.setStyleSheet(f"""
@@ -3592,6 +3764,7 @@ class MainWindow(QMainWindow):
         self._review_sig.connect(self._show_review)
         self._result_sig.connect(self._show_result_hud)
         self._result_close_sig.connect(self._close_result_hud)
+        self._local_ai_sig.connect(self._show_local_ai_hud)
         self._cam_stop = threading.Event()
         self._cam_thread = None
 
@@ -3686,6 +3859,78 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _show_local_ai_hud(self, payload) -> None:
+        """Slot — show the interactive Local AI model picker in the center HUD."""
+        try:
+            if self._hud_cam_stack.currentIndex() == 1:
+                self._cam_stop.set()
+            if self._weather_view.isVisible():
+                self._weather_view.close_view()
+            if self._result_hud.isVisible():
+                self._close_result_hud()
+            data = dict(payload or {})
+            self._local_ai_hud.set_models(
+                list(data.get("models") or []),
+                str(data.get("selected") or ""),
+                bool(data.get("enabled", True)),
+                bool(data.get("available", False)),
+            )
+            self._hud_cam_stack.setCurrentIndex(4)
+            self._local_ai_hud._list.setFocus(Qt.FocusReason.OtherFocusReason)
+        except Exception:
+            pass
+
+    def _on_local_ai_selected(self, model: str) -> None:
+        try:
+            from memory.config_manager import save_local_ai_model
+            save_local_ai_model(model)
+            self.write_log(f"SYS: Local AI selected — {model}")
+        except Exception as exc:
+            self.write_log(f"ERR: Could not save Local AI model — {exc}")
+
+    def _close_local_ai_hud(self) -> None:
+        try:
+            if self._hud_cam_stack.currentIndex() == 4:
+                self._hud_cam_stack.setCurrentIndex(0)
+        except Exception:
+            pass
+
+    def _load_local_ai_hud(self) -> None:
+        """Load Ollama state off the Qt thread, then emit the finished payload."""
+        try:
+            from core.local_model_router import installed_models, is_available
+            from memory.config_manager import (
+                get_local_ai_enabled, get_local_ai_model,
+            )
+            payload = {
+                "models": sorted(installed_models(refresh=True)),
+                "selected": get_local_ai_model(),
+                "enabled": get_local_ai_enabled(),
+                "available": is_available(),
+            }
+        except Exception as exc:
+            payload = {
+                "models": [],
+                "selected": "",
+                "enabled": True,
+                "available": False,
+                "error": str(exc),
+            }
+        self._local_ai_sig.emit(payload)
+
+    def show_local_ai_picker(self) -> None:
+        threading.Thread(
+            target=self._load_local_ai_hud,
+            daemon=True,
+            name="local-ai-hud-loader",
+        ).start()
+
+    def is_local_ai_hud_open(self) -> bool:
+        try:
+            return self._hud_cam_stack.currentIndex() == 4 and self._local_ai_hud.isVisible()
+        except Exception:
+            return False
+
     def _show_weather(self, payload) -> None:
         """Show weather as a temporary full weather HUD, like live camera."""
         data = dict(payload or {})
@@ -3726,6 +3971,31 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def show_local_ai_picker(self) -> None:
+        """Thread-safe: load and show the Local AI model picker."""
+        try:
+            self._win.show_local_ai_picker()
+        except Exception:
+            pass
+
+    def is_local_ai_hud_open(self) -> bool:
+        try:
+            return bool(self._win.is_local_ai_hud_open())
+        except Exception:
+            return False
+
+    def is_any_hud_open(self) -> bool:
+        try:
+            return bool(self._win.is_any_hud_open())
+        except Exception:
+            return False
+
+    def close_active_hud(self) -> None:
+        try:
+            self._win.close_active_hud()
+        except Exception:
+            pass
+
     def is_weather_hud_open(self) -> bool:
         try:
             return self._hud_cam_stack.currentIndex() == 2 and self._weather_view.isVisible()
@@ -3737,6 +4007,32 @@ class MainWindow(QMainWindow):
             return self._hud_cam_stack.currentIndex() == 1
         except Exception:
             return False
+
+    def is_any_hud_open(self) -> bool:
+        try:
+            return self._hud_cam_stack.currentIndex() in (1, 2, 3, 4)
+        except Exception:
+            return False
+
+    def close_active_hud(self) -> None:
+        """Close whichever temporary center HUD is currently active."""
+        try:
+            idx = self._hud_cam_stack.currentIndex()
+            if idx == 1:
+                self._cam_stop.set()
+                self._hud_cam_stack.setCurrentIndex(0)
+            elif idx == 2:
+                self._weather_view.close_view()
+                self._hud_cam_stack.setCurrentIndex(0)
+            elif idx == 3:
+                self._close_result_hud()
+            elif idx == 4:
+                self._close_local_ai_hud()
+        except Exception:
+            try:
+                self._hud_cam_stack.setCurrentIndex(0)
+            except Exception:
+                pass
 
     def _apply_privacy_shield(self, active: bool) -> None:
         self._privacy_shield_active = bool(active)
