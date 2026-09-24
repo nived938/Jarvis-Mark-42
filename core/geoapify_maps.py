@@ -311,26 +311,41 @@ def route_between_places(start_text: str, end_text: str) -> dict[str, Any]:
 
     distance_m = None
     time_s = None
-    for obj in (
-        route_payload if isinstance(route_payload, dict) else {},
-        *((route_payload.get("features") or []) if isinstance(route_payload, dict) else []),
-        *((route_payload.get("results") or []) if isinstance(route_payload, dict) else []),
-    ):
+
+    def _read_route_metrics(obj: Any) -> None:
+        nonlocal distance_m, time_s
         if not isinstance(obj, dict):
-            continue
+            return
         props = obj.get("properties") if isinstance(obj.get("properties"), dict) else obj
-        if distance_m is None and props.get("distance") is not None:
-            try:
-                distance_m = float(props["distance"])
-            except (TypeError, ValueError):
-                pass
-        if time_s is None and props.get("time") is not None:
-            try:
-                time_s = float(props["time"])
-            except (TypeError, ValueError):
-                pass
+        if isinstance(props, dict):
+            if distance_m is None and props.get("distance") is not None:
+                try:
+                    distance_m = float(props["distance"])
+                except (TypeError, ValueError):
+                    pass
+            if time_s is None and props.get("time") is not None:
+                try:
+                    time_s = float(props["time"])
+                except (TypeError, ValueError):
+                    pass
+
+        # JSON-format routes put the route metrics on the route object or its
+        # legs; GeoJSON routes normally put them on Feature.properties.
+        for leg in obj.get("legs") or []:
+            _read_route_metrics(leg)
+            if distance_m is not None and time_s is not None:
+                break
+
+    _read_route_metrics(route_payload)
+    for feature in (route_payload.get("features") or []) if isinstance(route_payload, dict) else []:
+        _read_route_metrics(feature)
         if distance_m is not None and time_s is not None:
             break
+    if distance_m is None or time_s is None:
+        for route_item in (route_payload.get("results") or []) if isinstance(route_payload, dict) else []:
+            _read_route_metrics(route_item)
+            if distance_m is not None and time_s is not None:
+                break
 
     result = {
         "route": route_payload,
@@ -497,8 +512,11 @@ html,body,#map{width:100%;height:100%;margin:0;background:#061018}
 .leaflet-control-attribution{font-size:10px}
 .leaflet-popup-content-wrapper,.leaflet-popup-tip{background:#061018;color:#d8f8ff}
 #status{position:fixed;left:12px;top:12px;z-index:9999;padding:7px 10px;border:1px solid #12617a;background:rgba(1,10,16,.9);color:#8ffcff;font:11px Consolas,monospace;border-radius:5px}
+#routeInfo{position:fixed;left:12px;bottom:18px;z-index:9999;min-width:230px;padding:10px 12px;border:1px solid #12617a;background:rgba(1,10,16,.94);color:#d8f8ff;font:12px Consolas,monospace;border-radius:6px;box-shadow:0 4px 18px rgba(0,0,0,.35)}
+#routeInfo .routeTitle{color:#8ffcff;font-size:10px;font-weight:bold;margin-bottom:5px}
+#routeInfo .routeMetric{font-size:16px;font-weight:bold;letter-spacing:.4px}
 </style></head><body>
-<div id="map"></div><div id="status">GEOAPIFY MAP READY</div>
+<div id="map"></div><div id="status">GEOAPIFY MAP READY</div><div id="routeInfo" hidden></div>
 <script src="__LEAFLET_JS__"></script><script>
 const map=L.map('map').setView([20,78],5);
 L.tileLayer('/tiles/carto/{z}/{x}/{y}.png',{maxZoom:19,attribution:'Powered by <a href="https://www.geoapify.com/" target="_blank">Geoapify</a> | © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>'}).addTo(map);
@@ -617,16 +635,30 @@ async function locateUser(){
     status.textContent='LOCATION ERROR: '+e.message;
   }
 }
-async function searchMap(q){if(!q)return;status.textContent='SEARCHING…';const c=map.getCenter();try{const r=await fetch('/api/search?'+new URLSearchParams({q,lat:c.lat,lon:c.lng}));const p=await r.json();if(!r.ok)throw Error(p.error||'Search failed');showResults(p);}catch(e){status.textContent='ERROR: '+e.message;}}
+async function searchMap(q){if(!q)return;document.getElementById('routeInfo').hidden=true;status.textContent='SEARCHING…';const c=map.getCenter();try{const r=await fetch('/api/search?'+new URLSearchParams({q,lat:c.lat,lon:c.lng}));const p=await r.json();if(!r.ok)throw Error(p.error||'Search failed');showResults(p);}catch(e){status.textContent='ERROR: '+e.message;}}
 function routeSummary(distanceM,timeS){
-  const km=Number(distanceM||0)/1000;
-  const min=Math.max(0,Number(timeS||0))/60;
-  const d=km>=1?km.toFixed(1)+' km':Math.round(Number(distanceM||0))+' m';
-  const t=min>=60?Math.floor(min/60)+' h '+Math.round(min%60)+' min':Math.round(min)+' min';
+  const hasDistance=Number.isFinite(Number(distanceM));
+  const hasTime=Number.isFinite(Number(timeS));
+  const km=hasDistance?Number(distanceM)/1000:0;
+  const min=hasTime?Math.max(0,Number(timeS))/60:0;
+  const d=hasDistance?(km>=1?km.toFixed(1)+' km':Math.round(Number(distanceM))+' m'):'Distance unavailable';
+  const t=hasTime?(min>=60?Math.floor(min/60)+' h '+Math.round(min%60)+' min':Math.round(min)+' min'):'Time unavailable';
   return d+' • '+t;
+}
+function showRouteInfo(fromText,toText,distanceM,timeS){
+  const box=document.getElementById('routeInfo');
+  const hasDistance=Number.isFinite(Number(distanceM));
+  const hasTime=Number.isFinite(Number(timeS));
+  const km=Number(distanceM||0)/1000;
+  const d=hasDistance?(km>=1?km.toFixed(1)+' km':Math.round(Number(distanceM))+' m'):'Unavailable';
+  const min=Math.max(0,Number(timeS||0))/60;
+  const t=hasTime?(min>=60?Math.floor(min/60)+' h '+Math.round(min%60)+' min':Math.round(min)+' min'):'Unavailable';
+  box.innerHTML='<div class="routeTitle">ROAD ROUTE</div><div>'+esc(fromText)+' → '+esc(toText)+'</div><div class="routeMetric">'+d+' • '+t+'</div>';
+  box.hidden=false;
 }
 async function routeTo(q){status.textContent='FINDING DESTINATION…';try{const c=map.getCenter();const g=await fetch('/api/geocode?'+new URLSearchParams({text:q}));const gp=await g.json();if(!g.ok||!(gp.results||[]).length)throw Error('Destination not found');const d=gp.results[0];const r=await fetch('/api/route?'+new URLSearchParams({slat:c.lat,slon:c.lng,elat:d.lat,elon:d.lon,mode:'drive'}));const p=await r.json();if(!r.ok)throw Error(p.error||'Route failed');if(routeLayer)map.removeLayer(routeLayer);routeLayer=L.geoJSON(p,{style:{color:'#00d4ff',weight:5,opacity:.85}}).addTo(map);map.fitBounds(routeLayer.getBounds(),{padding:[30,30]});status.textContent='ROUTE • DRIVE';}catch(e){status.textContent='ROUTE ERROR: '+e.message;}}
 async function routeBetween(fromText,toText){
+  document.getElementById('routeInfo').hidden=true;
   status.textContent='CALCULATING ROAD ROUTE…';
   try{
     markers.clearLayers();
@@ -655,6 +687,7 @@ async function routeBetween(fromText,toText){
     if(routeLayer.getBounds().isValid())bounds.extend(routeLayer.getBounds());
     map.fitBounds(bounds,{padding:[55,55],maxZoom:14,animate:true});
 
+    showRouteInfo(fromText,toText,p.distance_m,p.time_s);
     status.textContent='ROAD ROUTE • '+routeSummary(p.distance_m,p.time_s);
     a.openPopup();
   }catch(e){
