@@ -170,3 +170,28 @@ The current branch intentionally does not include:
 - WhatsApp voice/video calling
 
 These should not be reintroduced accidentally while documenting or extending the project.
+
+## Local AI and voice profiles
+
+- Local Ollama model router with automatic fast/balanced/smart/vision selection
+- RAM-aware model selection using the installed local model inventory
+- Local AI direct tool for private/offline prompts and optional local image analysis
+- Automatic Ollama fallback for text-only one-shot AI calls when the cloud ladder cannot answer
+- Named JARVIS voice profiles: normal, calm, energetic, deep, and bright
+- Live-session reconnect when a voice profile changes
+
+## Resource intelligence
+
+- Detailed CPU, RAM, disk, GPU/VRAM, network, and process snapshot
+- Top CPU and top-memory process inspection
+- Resource-pressure recommendations for heavy applications and local AI workloads
+- Read-only resource manager so JARVIS does not silently terminate processes
+
+## Notification intelligence
+
+- Automatic notification categorization and priority levels
+- Repeated-alert deduplication with occurrence counts
+- Important/critical filtering
+- Notification digests and unread summaries
+- Quiet mode with critical-alert bypass
+- Intelligent gating for background/system notifications before they interrupt a Live conversation
