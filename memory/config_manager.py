@@ -104,6 +104,32 @@ def save_voice(voice_name: str) -> None:
     CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
 
 
+# ── Local AI / Ollama ────────────────────────────────────────────────────────
+def get_local_ai_model() -> str:
+    """Return the preferred Ollama model, or empty when auto-selection is enabled."""
+    return str(load_api_keys().get("local_ai_model", "") or "").strip()
+
+
+def save_local_ai_model(model: str) -> None:
+    """Persist the preferred Ollama model name."""
+    _save_flag("local_ai_model", str(model or "").strip())
+
+
+def get_local_ai_enabled() -> bool:
+    """Whether JARVIS may use the local Ollama fallback/router."""
+    return bool(load_api_keys().get("local_ai_enabled", True))
+
+
+def save_local_ai_enabled(enabled: bool) -> None:
+    _save_flag("local_ai_enabled", enabled)
+
+
+def get_ollama_base_url() -> str:
+    """Base URL for the local Ollama HTTP API."""
+    value = str(load_api_keys().get("ollama_base_url", "http://127.0.0.1:11434") or "").strip()
+    return value.rstrip("/") or "http://127.0.0.1:11434"
+
+
 def get_wake_word_enabled() -> bool:
     """Whether local wake-word gating is on (assistant sleeps until 'Hey Jarvis')."""
     return load_api_keys().get("wake_word_enabled", False)
@@ -172,17 +198,11 @@ def save_thinking_enabled(enabled: bool) -> None:
 def get_turn_tuning() -> dict:
     """How eagerly the server decides you have stopped speaking.
 
-    OFF by default, and that default was earned. Cutting turns shorter looks
-    like a free speed win and is not: proactive audio has to judge whether an
-    utterance was even addressed to the assistant, and a turn clipped early
-    gives it less to judge, so it stays quiet — and the reply to your first
-    sentence only arrives once your second one has given it enough context.
-    That reads as the assistant being a turn behind, which is far worse than
-    the fraction of a second the tuning saves.
+    Enabled by default with a 120 ms silence window to prioritize fast voice
+    responses. Increase it when longer natural pauses need to stay in one turn.
 
-    Turn it on with "turn_tuning": {"enabled": true} if your own microphone and
-    speaking pace suit it. `silence_ms` is the one that is felt: the pause the
-    server sits through before accepting your turn is over.
+    Set "turn_tuning": {"enabled": false} to restore the server defaults.
+    "silence_ms" is the main latency control.
     """
     cfg = load_api_keys().get("turn_tuning")
     cfg = cfg if isinstance(cfg, dict) else {}
@@ -194,9 +214,9 @@ def get_turn_tuning() -> dict:
             return default
 
     return {
-        "enabled":    bool(cfg.get("enabled", False)),
-        "silence_ms": _int("silence_ms", 550, 200, 3000),
-        "prefix_ms":  _int("prefix_ms", 150, 0, 1000),
+        "enabled":    bool(cfg.get("enabled", True)),
+        "silence_ms": _int("silence_ms", 120, 50, 3000),
+        "prefix_ms":  _int("prefix_ms", 120, 0, 1000),
         # "high" = quicker to decide speech has ended.
         "end_sensitivity":   str(cfg.get("end_sensitivity", "high")).lower(),
         "start_sensitivity": str(cfg.get("start_sensitivity", "default")).lower(),
@@ -219,16 +239,12 @@ def save_turn_tuning(values: dict) -> None:
 
 
 def get_proactive_audio_enabled() -> bool:
-    """Whether the model gets to decide an utterance was not aimed at it and
-    stay quiet.
+    """Off by default for lower response latency.
 
-    On by default — it is what stops the assistant answering the room. But it
-    is also the first thing to switch off if replies ever seem to arrive a turn
-    late: what looks like lag is usually the model having judged your previous
-    sentence as not addressed to it, and only changing its mind once the next
-    one arrives.
+    Set "proactive_audio": true when filtering background speech is more
+    important than faster responses.
     """
-    return bool(load_api_keys().get("proactive_audio", True))
+    return bool(load_api_keys().get("proactive_audio", False))
 
 
 def save_proactive_audio_enabled(enabled: bool) -> None:

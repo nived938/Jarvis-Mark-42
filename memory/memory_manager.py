@@ -16,6 +16,7 @@ BASE_DIR         = get_base_dir()
 MEMORY_PATH      = BASE_DIR / "memory" / "long_term.json"
 _lock            = Lock()
 MAX_VALUE_LENGTH = 380
+MAX_MEMORY_IMPORTANCE = 5
 
 # ── Why there are two very different numbers here ────────────────────────────
 #
@@ -52,6 +53,7 @@ def _empty_memory() -> dict:
         "relationships": {},
         "wishes":        {},
         "notes":         {},
+        "routines":      {},
     }
 
 def load_memory() -> dict:
@@ -97,7 +99,14 @@ def _trim_to_limit(memory: dict) -> dict:
     if len(json.dumps(memory, ensure_ascii=False)) <= MEMORY_MAX_CHARS:
         return memory
     entries = _all_entries(memory)
-    entries.sort(key=lambda t: t[2].get("updated", "0000-00-00"))
+    # Keep important/pinned memories longer than disposable observations.
+    entries.sort(
+        key=lambda t: (
+            bool(t[2].get("pinned", False)),
+            int(t[2].get("importance", 1) or 1),
+            t[2].get("updated", "0000-00-00"),
+        )
+    )
     dropped = []
     for cat, key, _ in entries:
         if len(json.dumps(memory, ensure_ascii=False)) <= MEMORY_MAX_CHARS:
@@ -147,10 +156,38 @@ def _recursive_update(target: dict, updates: dict) -> bool:
             if _recursive_update(target[key], value):
                 changed = True
         else:
-            new_val  = _truncate_value(str(value["value"] if isinstance(value, dict) else value))
-            entry    = {"value": new_val, "updated": datetime.now().strftime("%Y-%m-%d")}
             existing = target.get(key, {})
-            if not isinstance(existing, dict) or existing.get("value") != new_val:
+            if not isinstance(existing, dict):
+                existing = {}
+            if isinstance(value, dict):
+                raw_value = value.get("value", "")
+                try:
+                    importance = max(1, min(MAX_MEMORY_IMPORTANCE, int(value.get("importance", existing.get("importance", 1)))))
+                except (TypeError, ValueError):
+                    importance = 1
+                pinned = bool(value.get("pinned", existing.get("pinned", False)))
+            else:
+                raw_value = value
+                try:
+                    importance = max(1, min(MAX_MEMORY_IMPORTANCE, int(existing.get("importance", 1))))
+                except (TypeError, ValueError):
+                    importance = 1
+                pinned = bool(existing.get("pinned", False))
+            if raw_value is None or not str(raw_value).strip():
+                continue
+            new_val = _truncate_value(str(raw_value))
+            entry = {
+                "value": new_val,
+                "updated": datetime.now().strftime("%Y-%m-%d"),
+                "importance": importance,
+            }
+            if pinned:
+                entry["pinned"] = True
+            if (
+                existing.get("value") != new_val
+                or int(existing.get("importance", 1) or 1) != importance
+                or bool(existing.get("pinned", False)) != pinned
+            ):
                 target[key] = entry
                 changed = True
     return changed
@@ -241,15 +278,20 @@ def format_memory_for_prompt(memory: dict | None) -> str:
             core_lines.append(f"{_pretty(key).title()}: {val}")
 
     # 2. Everything else, most recently updated first
-    rest: list[tuple[str, str, str, str]] = []   # (updated, cat, key, value)
+    rest: list[tuple[int, str, str, str, str]] = []   # (importance, updated, cat, key, value)
     for cat in _CATEGORY_LABELS:
         for key, entry in (memory.get(cat, {}) or {}).items():
             val = _entry_value(entry)
             if not val:
                 continue
             updated = (entry.get("updated", "") if isinstance(entry, dict) else "") or "0000-00-00"
-            rest.append((updated, cat, key, val))
-    rest.sort(key=lambda t: t[0], reverse=True)
+            try:
+                importance = max(1, min(MAX_MEMORY_IMPORTANCE, int(entry.get("importance", 1))))
+            except (TypeError, ValueError):
+                importance = 1
+            rest.append((importance, updated, cat, key, val))
+    # Importance is a stable signal, with recency breaking ties.
+    rest.sort(key=lambda t: (t[0], t[1]), reverse=True)
 
     used    = sum(len(l) + 1 for l in core_lines)
     shown: dict[str, list[str]] = {}
@@ -261,7 +303,7 @@ def format_memory_for_prompt(memory: dict | None) -> str:
     # matter most in conversation are also the ones that change least often, so
     # pure recency systematically buries them.
     per_cat_used: dict[str, int] = {}
-    for _updated, cat, key, val in rest:
+    for _importance, _updated, cat, key, val in rest:
         line = f"  - {_pretty(key).title()}: {val}"
         if (per_cat_used.get(cat, 0) < PROMPT_MAX_PER_CATEGORY
                 and used + len(line) + 1 <= PROMPT_CORE_CHARS):
@@ -324,6 +366,107 @@ def format_memory_for_prompt(memory: dict | None) -> str:
     return "\n".join(out) + "\n"
 
 
+
+def forget_memory(query: str = "", category: str = "", key: str = "") -> str:
+    """Explicitly forget stored facts matching a key or lexical query."""
+    memory = load_memory()
+    target_cat = (category or "").strip().lower()
+    target_key = (key or "").strip().lower()
+    words = [w for w in re.split(r"[^\w]+", (query or "").lower()) if len(w) > 1]
+
+    removed = []
+    for cat, items in list(memory.items()):
+        if cat == "routines":
+            continue
+        if target_cat and cat != target_cat:
+            continue
+        if not isinstance(items, dict):
+            continue
+        for item_key, entry in list(items.items()):
+            if target_key and item_key.lower() != target_key:
+                continue
+            value = _entry_value(entry)
+            hay = f"{item_key.replace('_', ' ')} {value} {cat}".lower()
+            if not target_key and words and not all(w in hay for w in words):
+                continue
+            if target_key or not words:
+                removed.append(f"{cat}/{item_key}")
+                del items[item_key]
+            elif words:
+                removed.append(f"{cat}/{item_key}")
+                del items[item_key]
+
+    if removed:
+        save_memory(memory)
+        return "Forgot: " + ", ".join(removed)
+    return "No stored memory matched that request."
+
+
+# ── Personal routines ─────────────────────────────────────────────────────────
+def save_routine(name: str, steps, description: str = "") -> str:
+    name = str(name or "").strip()
+    if not name:
+        return "Routine name is required."
+    if isinstance(steps, str):
+        clean_steps = [s.strip() for s in re.split(r"\n|\||;", steps) if s.strip()]
+    else:
+        clean_steps = [str(s).strip() for s in (steps or []) if str(s).strip()]
+    if not clean_steps:
+        return "A routine needs at least one step."
+
+    memory = load_memory()
+    routines = memory.setdefault("routines", {})
+    routines[name.lower()] = {
+        "name": name,
+        "steps": clean_steps[:20],
+        "description": str(description or "").strip()[:300],
+        "updated": datetime.now().strftime("%Y-%m-%d"),
+    }
+    save_memory(memory)
+    return f"Routine saved: {name} ({len(clean_steps)} step{'s' if len(clean_steps) != 1 else ''})."
+
+
+def delete_routine(name: str) -> str:
+    key = str(name or "").strip().lower()
+    memory = load_memory()
+    routines = memory.get("routines", {})
+    if key in routines:
+        removed = routines.pop(key)
+        save_memory(memory)
+        return f"Routine deleted: {removed.get('name', key)}."
+    return f"Routine not found: {name}"
+
+
+def list_routines() -> str:
+    routines = load_memory().get("routines", {})
+    if not isinstance(routines, dict) or not routines:
+        return "No personal routines are configured."
+    lines = []
+    for key, routine in routines.items():
+        if not isinstance(routine, dict):
+            continue
+        name = routine.get("name", key)
+        steps = routine.get("steps", [])
+        lines.append(f"{name}: {len(steps)} step{'s' if len(steps) != 1 else ''}")
+    return "Personal routines:\n" + "\n".join(lines)
+
+
+def get_routine(name: str) -> dict | None:
+    routines = load_memory().get("routines", {})
+    routine = routines.get(str(name or "").strip().lower()) if isinstance(routines, dict) else None
+    return dict(routine) if isinstance(routine, dict) else None
+
+
+def format_routines_for_prompt(memory: dict | None) -> str:
+    routines = (memory or {}).get("routines", {})
+    if not isinstance(routines, dict) or not routines:
+        return ""
+    names = []
+    for key, routine in routines.items():
+        if isinstance(routine, dict):
+            names.append(str(routine.get("name", key)))
+    return ", ".join(names[:30])
+
 # ── Recall ────────────────────────────────────────────────────────────────────
 
 def _score(query_words: list[str], cat: str, key: str, value: str) -> int:
@@ -347,37 +490,64 @@ def _score(query_words: list[str], cat: str, key: str, value: str) -> int:
     return score
 
 
-def search_memory(query: str, limit: int = 8) -> str:
-    """Find stored facts matching `query`. Backs the recall_memory tool.
-
-    An empty query is treated as "show me everything you know", capped - the
-    model asks that when the user says "what do you remember about me?"."""
+def search_memory(query: str = "", limit: int = 8) -> str:
+    """Search stored memories using lexical relevance, importance, and recency."""
     memory = load_memory()
-    words  = [w for w in re.split(r"[^\w]+", (query or "").lower()) if len(w) > 1]
+    words = [w for w in re.split(r"[^\w]+", (query or "").lower()) if len(w) > 1]
 
-    rows: list[tuple[int, str, str, str]] = []
+    rows: list[tuple[int, int, str, str, str, str]] = []
     for cat, items in memory.items():
         if not isinstance(items, dict):
-            continue                     # skip 'sessions', which is a list
+            continue
         for key, entry in items.items():
             val = _entry_value(entry)
             if not val:
                 continue
-            s = _score(words, cat, key, val) if words else 1
-            if s > 0:
-                rows.append((s, cat, key, val))
+
+            score = _score(words, cat, key, val) if words else 1
+            if score <= 0:
+                continue
+
+            if isinstance(entry, dict):
+                try:
+                    importance = max(
+                        1,
+                        min(MAX_MEMORY_IMPORTANCE, int(entry.get("importance", 1) or 1)),
+                    )
+                except (TypeError, ValueError):
+                    importance = 1
+                updated = entry.get("updated", "") or "0000-00-00"
+            else:
+                importance = 1
+                updated = "0000-00-00"
+
+            rows.append((score, importance, updated, cat, key, val))
 
     if not rows:
-        return (f"Nothing stored about '{query}'." if query
-                else "I have not stored anything about this person yet.")
+        return (
+            f"Nothing stored about '{query}'."
+            if query
+            else "I have not stored anything about this person yet."
+        )
 
-    rows.sort(key=lambda r: (-r[0], r[2]))
-    lines = [f"{cat}/{_pretty(key)}: {val}" for _s, cat, key, val in rows[:max(1, limit)]]
-    head  = (f"Stored facts matching '{query}':" if query
-             else "Everything currently stored:")
-    more  = (f"\n(+{len(rows) - len(lines)} more — search with a narrower keyword)"
-             if len(rows) > len(lines) else "")
-    return head + "\n" + "\n".join(lines) + more
+    rows.sort(key=lambda row: (-row[0], -row[1], row[2], row[4]))
+    lines_out = [
+        f"{cat}/{_pretty(key)}: {val}"
+        for _score_value, _importance, _updated, cat, key, val
+        in rows[: max(1, limit)]
+    ]
+    head = (
+        f"Stored facts matching '{query}':"
+        if query
+        else "Everything currently stored:"
+    )
+    more = (
+        f"\n(+{len(rows) - len(lines_out)} more — search with a narrower keyword)"
+        if len(rows) > len(lines_out)
+        else ""
+    )
+    return head + "\n" + "\n".join(lines_out) + more
+
 
 
 def all_entries_for_ui() -> list[dict]:
@@ -420,7 +590,6 @@ def forget(key: str, category: str = "notes") -> str:
     return f"Not found: {category}/{key}"
 
 
-forget_memory = forget
 
 
 # ── Session memory ─────────────────────────────────────────────────────────────

@@ -28,10 +28,19 @@ from PyQt6.QtGui import (
     QPen, QPixmap, QRadialGradient, QShortcut,
 )
 from PyQt6.QtWidgets import (
-    QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplitter,
-    QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QProgressBar,
+    QApplication, QComboBox, QFileDialog, QFrame, QGraphicsOpacityEffect,
+    QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton,
+    QScrollArea, QSizePolicy, QSplitter, QStackedWidget, QTextEdit,
+    QVBoxLayout, QWidget, QProgressBar, QListWidget,
 )
+
+
+try:
+    from PyQt6.QtWebEngineWidgets import QWebEngineView
+    _GEO_MAP_WEBENGINE = True
+except Exception:
+    QWebEngineView = None
+    _GEO_MAP_WEBENGINE = False
 
 try:
     from core.avatar import HoloAvatar
@@ -59,7 +68,7 @@ def _read_full_config() -> dict:
 
 # Single source of truth for the release name — the window title, the header
 # badge and the readme must never disagree again.
-APP_VERSION  = "MARK LIV"
+APP_VERSION  = "JARVIS MARK 42"
 APP_PROTOCOL = APP_VERSION.split()[-1]
 
 _DEFAULT_W, _DEFAULT_H = 980, 700
@@ -1365,6 +1374,350 @@ class _CameraPreview(QWidget):
         self.show()
         self.raise_()
         self._timer.start(6_000)   # auto-dismiss after 6 s
+
+
+
+class WeatherHudView(QWidget):
+    """Full HUD weather experience: animated, temporary, and camera-like."""
+
+    closed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"background: {C.BG};")
+        self._data: dict = {}
+        self._detail = ""
+        self._phase = 0.0
+        self._closing = False
+
+        self._fade = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self._fade)
+        self._fade.setOpacity(0.0)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 14, 18, 14)
+        root.setSpacing(10)
+
+        hdr = QHBoxLayout()
+        hdr.setSpacing(8)
+        self._title = QLabel("◈  WEATHER INTELLIGENCE")
+        self._title.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        self._title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        hdr.addWidget(self._title)
+
+        self._live = QLabel("● LIVE")
+        self._live.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._live.setStyleSheet(
+            f"color: {C.GREEN}; background: rgba(0,255,136,16); "
+            f"border: 1px solid {C.GREEN_D}; border-radius: 4px; padding: 2px 6px;"
+        )
+        hdr.addWidget(self._live)
+        hdr.addStretch()
+
+        self._source = QLabel("WEATHERSTACK • IP LOCATION")
+        self._source.setFont(QFont("Courier New", 7))
+        self._source.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        hdr.addWidget(self._source)
+
+        close = QPushButton("✕  CLOSE")
+        close.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setStyleSheet(f"""
+            QPushButton {{
+                color: {C.TEXT_DIM}; background: transparent;
+                border: 1px solid {C.BORDER}; border-radius: 4px;
+                padding: 4px 7px;
+            }}
+            QPushButton:hover {{
+                color: {C.PRI}; border-color: {C.PRI};
+                background: {C.PRI_GHO};
+            }}
+        """)
+        close.clicked.connect(self.close_view)
+        hdr.addWidget(close)
+        root.addLayout(hdr)
+
+        hero = QFrame()
+        hero.setStyleSheet(f"""
+            QFrame {{
+                background: rgba(1, 15, 24, 225);
+                border: 1px solid {C.BORDER_B};
+                border-radius: 10px;
+            }}
+        """)
+        hero_lay = QHBoxLayout(hero)
+        hero_lay.setContentsMargins(18, 14, 18, 14)
+        hero_lay.setSpacing(18)
+
+        self._icon = QLabel("☁")
+        self._icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._icon.setFont(QFont("Segoe UI Symbol", 42))
+        self._icon.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        self._icon.setFixedWidth(78)
+        hero_lay.addWidget(self._icon)
+
+        hero_text = QVBoxLayout()
+        hero_text.setSpacing(2)
+        self._place = QLabel("CURRENT LOCATION")
+        self._place.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
+        self._place.setStyleSheet(f"color: {C.WHITE}; background: transparent;")
+        self._place.setWordWrap(True)
+        hero_text.addWidget(self._place)
+
+        self._condition = QLabel("Awaiting weather data")
+        self._condition.setFont(QFont("Courier New", 8))
+        self._condition.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+        self._condition.setWordWrap(True)
+        hero_text.addWidget(self._condition)
+
+        self._time = QLabel("LOCAL TIME  --")
+        self._time.setFont(QFont("Courier New", 7))
+        self._time.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        hero_text.addWidget(self._time)
+        hero_text.addStretch()
+        hero_lay.addLayout(hero_text, 1)
+
+        self._temp = QLabel("--°")
+        self._temp.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._temp.setFont(QFont("Courier New", 32, QFont.Weight.Bold))
+        self._temp.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        self._temp.setMinimumWidth(150)
+        hero_lay.addWidget(self._temp)
+        root.addWidget(hero)
+
+        metrics = QGridLayout()
+        metrics.setHorizontalSpacing(8)
+        metrics.setVerticalSpacing(8)
+        self._metric_labels = {}
+        metric_defs = [
+            ("FEELS LIKE", "feelslike", "°C"),
+            ("HUMIDITY", "humidity", "%"),
+            ("WIND", "wind_speed", " km/h"),
+            ("PRESSURE", "pressure", " hPa"),
+            ("VISIBILITY", "visibility", " km"),
+            ("UV INDEX", "uv_index", ""),
+            ("CLOUD COVER", "cloudcover", "%"),
+            ("PRECIP", "precip", " mm"),
+        ]
+        for i, (label, key, suffix) in enumerate(metric_defs):
+            card = QFrame()
+            card.setStyleSheet(f"""
+                QFrame {{
+                    background: rgba(0, 11, 18, 220);
+                    border: 1px solid {C.BORDER};
+                    border-radius: 7px;
+                }}
+            """)
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(9, 7, 9, 7)
+            cl.setSpacing(2)
+            l1 = QLabel(label)
+            l1.setFont(QFont("Courier New", 6, QFont.Weight.Bold))
+            l1.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+            l2 = QLabel("—")
+            l2.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
+            l2.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+            cl.addWidget(l1)
+            cl.addWidget(l2)
+            self._metric_labels[key] = (l2, suffix)
+            metrics.addWidget(card, i // 4, i % 4)
+        root.addLayout(metrics)
+
+        detail_card = QFrame()
+        detail_card.setStyleSheet(f"""
+            QFrame {{
+                background: rgba(0, 13, 20, 205);
+                border: 1px solid {C.BORDER};
+                border-radius: 8px;
+            }}
+        """)
+        dl = QVBoxLayout(detail_card)
+        dl.setContentsMargins(10, 8, 10, 8)
+        dl.setSpacing(3)
+
+        self._detail_title = QLabel("DETAILS")
+        self._detail_title.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._detail_title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        dl.addWidget(self._detail_title)
+
+        self._detail_lbl = QLabel("Live weather data will appear here.")
+        self._detail_lbl.setFont(QFont("Courier New", 7))
+        self._detail_lbl.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+        self._detail_lbl.setWordWrap(True)
+        self._detail_lbl.setMaximumHeight(72)
+        dl.addWidget(self._detail_lbl)
+        root.addWidget(detail_card)
+
+        status = QHBoxLayout()
+        self._status = QLabel("WEATHER HUD • READY")
+        self._status.setFont(QFont("Courier New", 6, QFont.Weight.Bold))
+        self._status.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        status.addWidget(self._status)
+        status.addStretch()
+
+        hint = QLabel("Say “close weather” to return to JARVIS")
+        hint.setFont(QFont("Courier New", 6))
+        hint.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        status.addWidget(hint)
+        root.addLayout(status)
+
+        self._anim = QPropertyAnimation(self._fade, b"opacity", self)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        self._tmr = QTimer(self)
+        self._tmr.timeout.connect(self._tick)
+        self._tmr.start(33)
+
+    @staticmethod
+    def _weather_symbol(condition: str) -> str:
+        c = (condition or "").lower()
+        if any(x in c for x in ("thunder", "storm", "lightning")):
+            return "⚡"
+        if any(x in c for x in ("snow", "sleet", "ice", "blizzard")):
+            return "❄"
+        if any(x in c for x in ("rain", "drizzle", "shower")):
+            return "☂"
+        if any(x in c for x in ("sunny", "clear")):
+            return "☀"
+        if any(x in c for x in ("cloud", "overcast", "mist", "fog")):
+            return "☁"
+        return "◌"
+
+    @staticmethod
+    def _num(value, suffix="—") -> str:
+        if value in (None, ""):
+            return "—"
+        try:
+            return f"{float(value):g}{suffix}"
+        except (TypeError, ValueError):
+            return f"{value}{suffix}"
+
+    def set_weather(self, payload: dict) -> None:
+        data = dict(payload or {})
+        self._data = data
+        self._detail = str(data.get("hud_detail") or "").strip()
+
+        place = ", ".join(
+            x for x in (
+                str(data.get("location") or "").strip(),
+                str(data.get("region") or "").strip(),
+                str(data.get("country") or "").strip(),
+            ) if x
+        ) or "Current Location"
+
+        cond = str(data.get("condition") or "Weather unavailable").strip()
+        self._place.setText(place[:72])
+        self._condition.setText(cond[:96])
+        self._temp.setText(self._num(data.get("temperature"), "°"))
+        self._icon.setText(self._weather_symbol(cond))
+        self._time.setText("LOCAL TIME  " + str(data.get("local_time") or "—"))
+
+        for key, (label, suffix) in self._metric_labels.items():
+            label.setText(self._num(data.get(key), suffix))
+
+        detail = self._detail or (
+            f"Condition: {cond}  •  "
+            f"Feels like: {self._num(data.get('feelslike'), '°C')}  •  "
+            f"Wind: {self._num(data.get('wind_speed'), ' km/h')}"
+        )
+        detail_lines = [ln.strip() for ln in detail.splitlines() if ln.strip()]
+        self._detail_lbl.setText("\n".join(detail_lines[:5])[:700])
+        self._status.setText(
+            "WEATHER HUD • LIVE • "
+            + (str(data.get("observation_time") or "UPDATED").upper())
+        )
+
+    def open_view(self) -> None:
+        self._closing = False
+        self._anim.stop()
+        self._fade.setOpacity(0.0)
+        self.show()
+        self.raise_()
+        self._anim.setDuration(420)
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(1.0)
+        try:
+            self._anim.finished.disconnect()
+        except Exception:
+            pass
+        self._anim.start()
+
+    def close_view(self) -> None:
+        if self._closing or not self.isVisible():
+            return
+        self._closing = True
+        self._anim.stop()
+        self._anim.setDuration(260)
+        self._anim.setStartValue(float(self._fade.opacity()))
+        self._anim.setEndValue(0.0)
+        try:
+            self._anim.finished.disconnect()
+        except Exception:
+            pass
+        self._anim.finished.connect(self._finish_close)
+        self._anim.start()
+
+    def _finish_close(self) -> None:
+        self.hide()
+        self._fade.setOpacity(0.0)
+        self._closing = False
+        self.closed.emit()
+
+    def _tick(self) -> None:
+        self._phase = (self._phase + 0.025) % 1000.0
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        if not p.isActive():
+            return
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.fillRect(self.rect(), qcol(C.BG))
+
+        W, H = self.width(), self.height()
+        cx, cy = W * 0.50, H * 0.50
+        t = self._phase
+
+        step = 42
+        drift = int((t * 9) % step)
+        p.setPen(QPen(qcol(C.PRI_GHO, 120), 1))
+        for x in range(-step, W + step, step):
+            p.drawLine(x + drift, 0, x + drift, H)
+        for y in range(-step, H + step, step):
+            p.drawLine(0, y + drift // 2, W, y + drift // 2)
+
+        rg = QRadialGradient(cx, cy, max(W, H) * 0.55)
+        rg.setColorAt(0.00, qcol(C.PRI, 24))
+        rg.setColorAt(0.35, qcol(C.PRI, 10))
+        rg.setColorAt(1.00, qcol(C.BG, 0))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(rg))
+        p.drawEllipse(QRectF(cx - W * 0.48, cy - H * 0.62, W * 0.96, H * 1.24))
+
+        radius = min(W, H) * 0.44
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        for n, alpha in ((1.0, 36), (0.82, 28), (0.64, 22)):
+            rr = radius * n
+            p.setPen(QPen(qcol(C.PRI, alpha), 1.0))
+            p.drawEllipse(QRectF(cx - rr, cy - rr, rr * 2, rr * 2))
+
+        sweep = (t * 65) % 360
+        p.setPen(QPen(qcol(C.PRI, 55), 1.5))
+        p.drawArc(
+            QRectF(cx - radius, cy - radius, radius * 2, radius * 2),
+            int(sweep * 16), 46 * 16,
+        )
+
+        pulse = 0.5 + 0.5 * math.sin(t * 2.2)
+        m, a = 18, int(70 + pulse * 60)
+        p.setPen(QPen(qcol(C.PRI, a), 1.5))
+        for sx, sy in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+            x = W - m if sx > 0 else m
+            y = H - m if sy > 0 else m
+            arm = 22 + 5 * pulse
+            p.drawLine(QLineF(x, y, x - sx * arm, y))
+            p.drawLine(QLineF(x, y, x, y - sy * arm))
 
 
 class SetupOverlay(QWidget):
@@ -2916,10 +3269,460 @@ class RemoteKeyOverlay(QWidget):
         self.closed.emit()
 
 
+
+class HudResultView(QWidget):
+    """Full-size center HUD for Gmail, calendar, messages, code, and other results."""
+
+    closed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"background: {C.BG};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 14, 18, 14)
+        root.setSpacing(10)
+
+        hdr = QHBoxLayout()
+        hdr.setSpacing(8)
+
+        self._title = QLabel("◈  JARVIS RESULT")
+        self._title.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
+        self._title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        hdr.addWidget(self._title)
+        hdr.addStretch()
+
+        self._status = QLabel("RESULT")
+        self._status.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._status.setStyleSheet(
+            f"color: {C.GREEN}; background: rgba(0,255,136,14); "
+            f"border: 1px solid {C.GREEN_D}; border-radius: 4px; padding: 2px 6px;"
+        )
+        hdr.addWidget(self._status)
+
+        copy_btn = QPushButton("COPY ALL")
+        copy_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_btn.setStyleSheet(f"""
+            QPushButton {{
+                color: {C.TEXT_DIM}; background: transparent;
+                border: 1px solid {C.BORDER}; border-radius: 4px;
+                padding: 4px 7px;
+            }}
+            QPushButton:hover {{ color: {C.PRI}; border-color: {C.PRI}; background: {C.PRI_GHO}; }}
+        """)
+        copy_btn.clicked.connect(self.copy_all)
+        hdr.addWidget(copy_btn)
+
+        close = QPushButton("✕  CLOSE")
+        close.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setStyleSheet(f"""
+            QPushButton {{
+                color: {C.TEXT_DIM}; background: transparent;
+                border: 1px solid {C.BORDER}; border-radius: 4px;
+                padding: 4px 7px;
+            }}
+            QPushButton:hover {{ color: {C.PRI}; border-color: {C.PRI}; background: {C.PRI_GHO}; }}
+        """)
+        close.clicked.connect(self.close_view)
+        hdr.addWidget(close)
+        root.addLayout(hdr)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {C.BORDER};")
+        root.addWidget(sep)
+
+        self._display = QTextEdit()
+        self._display.setReadOnly(True)
+        self._display.setAcceptRichText(False)
+        self._display.setFont(QFont("Courier New", 9))
+        self._display.setStyleSheet(f"""
+            QTextEdit {{
+                background: rgba(0, 8, 14, 245);
+                color: {C.TEXT};
+                border: 1px solid {C.BORDER_B};
+                border-radius: 8px;
+                padding: 12px 14px;
+                selection-background-color: {C.PRI_GHO};
+            }}
+            QScrollBar:vertical {{
+                background: {C.BG}; width: 8px; border: none;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {C.BORDER_B}; border-radius: 4px; min-height: 24px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0; border: none;
+            }}
+            QScrollBar:horizontal {{
+                background: {C.BG}; height: 8px; border: none;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: {C.BORDER_B}; border-radius: 4px; min-width: 24px;
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0; border: none;
+            }}
+        """)
+        root.addWidget(self._display, stretch=1)
+
+        self._hint = QLabel("Scroll to read • Select text to copy • Say “close” to return")
+        self._hint.setFont(QFont("Courier New", 7))
+        self._hint.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        root.addWidget(self._hint)
+
+    def set_result(self, title: str, text: str, code: bool = False) -> None:
+        self._title.setText(("◈  " + str(title or "JARVIS RESULT").upper())[:72])
+        self._status.setText("CODE" if code else "RESULT")
+        self._display.setLineWrapMode(
+            QTextEdit.LineWrapMode.NoWrap if code else QTextEdit.LineWrapMode.WidgetWidth
+        )
+        self._display.setPlainText(str(text or ""))
+        self._display.moveCursor(self._display.textCursor().MoveOperation.Start)
+        self._hint.setText(
+            "Select text to copy • Code is copied automatically • Say “close” to return"
+            if code else
+            "Scroll to read • Select text to copy • Say “close” to return"
+        )
+
+    def copy_all(self) -> None:
+        try:
+            QApplication.clipboard().setText(self._display.toPlainText())
+            self._status.setText("COPIED")
+            QTimer.singleShot(1600, lambda: self._status.setText(
+                "CODE" if self._display.lineWrapMode() == QTextEdit.LineWrapMode.NoWrap else "RESULT"
+            ))
+        except Exception:
+            pass
+
+    def close_view(self) -> None:
+        self.closed.emit()
+
+
+class LocalAIHudView(QWidget):
+    """Interactive Local AI model picker embedded in the center HUD.
+
+    The QListWidget supplies native Up/Down navigation plus Enter activation,
+    so the picker needs no custom keyboard event loop.
+    """
+
+    closed = pyqtSignal()
+    selected = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"background: {C.BG};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 14, 18, 14)
+        root.setSpacing(10)
+
+        hdr = QHBoxLayout()
+        hdr.setSpacing(8)
+
+        self._title = QLabel("◈  LOCAL AI")
+        self._title.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
+        self._title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        hdr.addWidget(self._title)
+        hdr.addStretch()
+
+        self._status = QLabel("LOADING")
+        self._status.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._status.setStyleSheet(
+            f"color: {C.GREEN}; background: rgba(0,255,136,14); "
+            f"border: 1px solid {C.GREEN_D}; border-radius: 4px; padding: 2px 6px;"
+        )
+        hdr.addWidget(self._status)
+
+        close = QPushButton("✕  CLOSE")
+        close.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setStyleSheet(f"""
+            QPushButton {{
+                color: {C.TEXT_DIM}; background: transparent;
+                border: 1px solid {C.BORDER}; border-radius: 4px;
+                padding: 4px 7px;
+            }}
+            QPushButton:hover {{ color: {C.PRI}; border-color: {C.PRI}; background: {C.PRI_GHO}; }}
+        """)
+        close.clicked.connect(self.close_view)
+        hdr.addWidget(close)
+        root.addLayout(hdr)
+
+        self._info = QLabel("")
+        self._info.setWordWrap(True)
+        self._info.setFont(QFont("Courier New", 8))
+        self._info.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+        root.addWidget(self._info)
+
+        self._list = QListWidget()
+        self._list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._list.setStyleSheet(f"""
+            QListWidget {{
+                background: rgba(0, 8, 14, 245);
+                color: {C.TEXT};
+                border: 1px solid {C.BORDER_B};
+                border-radius: 8px;
+                padding: 8px;
+                outline: none;
+            }}
+            QListWidget::item {{
+                padding: 10px 12px;
+                margin: 2px 0;
+                border: 1px solid transparent;
+                border-radius: 5px;
+            }}
+            QListWidget::item:selected {{
+                color: {C.WHITE};
+                background: {C.PRI_GHO};
+                border: 1px solid {C.PRI_DIM};
+            }}
+            QListWidget::item:hover {{
+                background: rgba(0, 31, 46, 180);
+                border: 1px solid {C.BORDER_B};
+            }}
+        """)
+        self._list.itemActivated.connect(self._select_current)
+        self._list.itemDoubleClicked.connect(self._select_current)
+        root.addWidget(self._list, stretch=1)
+
+        self._hint = QLabel("↑ ↓ choose model  •  Enter select  •  Esc / say “close” to return")
+        self._hint.setFont(QFont("Courier New", 7))
+        self._hint.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        root.addWidget(self._hint)
+
+        esc = QShortcut(QKeySequence("Escape"), self)
+        esc.activated.connect(self.close_view)
+
+    def set_models(
+        self,
+        models: list[str],
+        selected: str,
+        enabled: bool,
+        available: bool,
+    ) -> None:
+        self._list.clear()
+        selected = str(selected or "").strip()
+        models = [str(x).strip() for x in models if str(x).strip()]
+        models = sorted(dict.fromkeys(models), key=str.casefold)
+
+        state = "ENABLED" if enabled else "DISABLED"
+        reach = "ONLINE" if available else "OLLAMA OFFLINE"
+        self._status.setText(f"{state} • {reach}")
+
+        if selected and selected in models:
+            self._info.setText(
+                f"Selected model: <b>{selected}</b><br>"
+                "Arrow keys change the highlighted model. Press Enter to make it the preferred model."
+            )
+        elif selected:
+            self._info.setText(
+                f"Saved model <b>{selected}</b> is not installed. Select an installed model below."
+            )
+        else:
+            self._info.setText(
+                "No preferred model is selected. JARVIS will auto-select based on the task and available RAM."
+            )
+
+        if not models:
+            self._list.addItem("No Ollama models detected.")
+            self._list.setEnabled(False)
+            return
+
+        self._list.setEnabled(True)
+        selected_row = 0
+        for i, model in enumerate(models):
+            prefix = "●  " if model == selected else "○  "
+            self._list.addItem(prefix + model)
+            item = self._list.item(i)
+            item.setData(Qt.ItemDataRole.UserRole, model)
+            if model == selected:
+                selected_row = i
+
+        self._list.setCurrentRow(selected_row)
+        self._list.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _select_current(self, _item=None) -> None:
+        item = self._list.currentItem()
+        if item is None:
+            return
+        model = str(item.data(Qt.ItemDataRole.UserRole) or "").strip()
+        if not model:
+            return
+        self.selected.emit(model)
+        for row in range(self._list.count()):
+            current = self._list.item(row)
+            name = str(current.data(Qt.ItemDataRole.UserRole) or "").strip()
+            current.setText(("●  " if name == model else "○  ") + name)
+        self._status.setText("SELECTED")
+        self._info.setText(
+            f"Selected model: <b>{model}</b><br>"
+            "This is now JARVIS's preferred local AI model for normal text tasks."
+        )
+
+    def close_view(self) -> None:
+        self.closed.emit()
+
+
+
+
+class GeoapifyMapsHudView(QWidget):
+    """Leaflet + Geoapify map viewer embedded in the center HUD."""
+
+    closed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"background: {C.BG};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 8, 10, 8)
+        root.setSpacing(8)
+
+        header = QHBoxLayout()
+        title = QLabel("◈  GEOAPIFY MAPS")
+        title.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        header.addWidget(title)
+        header.addStretch()
+
+        self._status = QLabel("READY")
+        self._status.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._status.setStyleSheet(
+            f"color: {C.GREEN}; background: transparent; padding-right: 8px;"
+        )
+        header.addWidget(self._status)
+
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Search places or addresses…")
+        self._search.setFont(QFont("Courier New", 8))
+        self._search.setMinimumWidth(230)
+        self._search.setStyleSheet(f"""
+            QLineEdit {{
+                color: {C.TEXT}; background: {C.PANEL2};
+                border: 1px solid {C.BORDER}; border-radius: 4px;
+                padding: 5px 8px;
+            }}
+            QLineEdit:focus {{ border-color: {C.PRI}; }}
+        """)
+        self._search.returnPressed.connect(self.search_current)
+        header.addWidget(self._search)
+
+        search = QPushButton("⌕ SEARCH")
+        search.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        search.setCursor(Qt.CursorShape.PointingHandCursor)
+        search.setStyleSheet(f"""
+            QPushButton {{
+                color: {C.TEXT_DIM}; background: transparent;
+                border: 1px solid {C.BORDER}; border-radius: 4px;
+                padding: 5px 8px;
+            }}
+            QPushButton:hover {{
+                color: {C.PRI}; border-color: {C.PRI}; background: {C.PRI_GHO};
+            }}
+        """)
+        search.clicked.connect(self.search_current)
+        header.addWidget(search)
+
+        close = QPushButton("✕  CLOSE")
+        close.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setStyleSheet(f"""
+            QPushButton {{
+                color: {C.TEXT_DIM}; background: transparent;
+                border: 1px solid {C.BORDER}; border-radius: 4px;
+                padding: 5px 8px;
+            }}
+            QPushButton:hover {{
+                color: {C.PRI}; border-color: {C.PRI}; background: {C.PRI_GHO};
+            }}
+        """)
+        close.clicked.connect(self.close_view)
+        header.addWidget(close)
+        root.addLayout(header)
+
+        self._web = None
+        if _GEO_MAP_WEBENGINE:
+            self._web = QWebEngineView(self)
+            self._web.setStyleSheet(f"border: 1px solid {C.BORDER_B};")
+            self._web.loadStarted.connect(lambda: self._set_status("LOADING"))
+            self._web.loadFinished.connect(self._on_loaded)
+            root.addWidget(self._web, stretch=1)
+        else:
+            fallback = QLabel(
+                "Geoapify Maps needs PyQt6-WebEngine.\n\n"
+                "Install it with:\n"
+                "pip install PyQt6-WebEngine\n\n"
+                "Then restart JARVIS."
+            )
+            fallback.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            fallback.setWordWrap(True)
+            fallback.setFont(QFont("Courier New", 9))
+            fallback.setStyleSheet(
+                f"color: {C.TEXT}; background: rgba(0,8,14,245); "
+                f"border: 1px solid {C.BORDER_B}; border-radius: 8px; padding: 20px;"
+            )
+            root.addWidget(fallback, stretch=1)
+
+        hint = QLabel(
+            "Geoapify + OpenStreetMap • search addresses and nearby places • "
+            "say “close” to return"
+        )
+        hint.setFont(QFont("Courier New", 7))
+        hint.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        root.addWidget(hint)
+
+    def _set_status(self, text: str) -> None:
+        self._status.setText(str(text or "READY"))
+
+    def open_map(self, query: str = "") -> None:
+        query = str(query or "").strip()
+        self._search.setText(query)
+        if not _GEO_MAP_WEBENGINE or self._web is None:
+            self._set_status("WEBENGINE REQUIRED")
+            return
+        try:
+            from core.geoapify_maps import map_url
+            self._set_status("LOADING")
+            self._web.setUrl(QUrl(map_url(query)))
+        except Exception as exc:
+            self._set_status("NOT CONFIGURED")
+            if self._web is not None:
+                self._web.setHtml(
+                    "<html><body style='background:#00060a;color:#8ffcff;"
+                    "font-family:Consolas;padding:24px'>"
+                    "<h3>Geoapify Maps</h3>"
+                    f"<p>{str(exc).replace('&','&amp;').replace('<','&lt;')}</p>"
+                    "</body></html>"
+                )
+
+    def search_current(self) -> None:
+        query = self._search.text().strip()
+        if not query:
+            return
+        self.open_map(query)
+
+    def _on_loaded(self, ok: bool) -> None:
+        self._set_status("ONLINE" if ok else "LOAD ERROR")
+
+    def close_view(self) -> None:
+        self.closed.emit()
+
+
 class MainWindow(QMainWindow):
     _log_sig        = pyqtSignal(str)
     _state_sig      = pyqtSignal(str)
     _content_sig    = pyqtSignal(str, str)   # (title, text) — thread-safe content display
+    _content_close_sig = pyqtSignal()         # close result panel from any thread
+    _weather_sig     = pyqtSignal(object)     # full weather HUD payload
+    _weather_close_sig = pyqtSignal()          # close weather HUD from any thread
+    _privacy_sig      = pyqtSignal(bool)       # privacy shield state
+    _emergency_sig    = pyqtSignal(bool)        # emergency latch → Qt thread
     _reconfig_sig   = pyqtSignal()           # trigger setup overlay from any thread
     _camera_sig     = pyqtSignal(bytes)      # show camera frame preview (small overlay)
     _cam_stream_sig = pyqtSignal(bool)       # True=start live stream, False=stop
@@ -2931,6 +3734,10 @@ class MainWindow(QMainWindow):
     _quiz_sig       = pyqtSignal(str, object, object)  # (topic, questions, grader)
     _quiz_hide_sig  = pyqtSignal()
     _review_sig     = pyqtSignal(str, str, object, object)  # document review payload
+    _result_sig     = pyqtSignal(str, str, bool)
+    _result_close_sig = pyqtSignal()
+    _local_ai_sig    = pyqtSignal(object)
+    _geo_maps_sig    = pyqtSignal(str)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -2959,6 +3766,9 @@ class MainWindow(QMainWindow):
         self.on_text_command   = None
         self.on_remote_clicked = None   # callable: () -> (url, key) | None
         self.on_interrupt      = None   # callable: () -> None — stop JARVIS mid-speech
+        self.on_emergency_kill = None   # callable: (engage: bool) -> None
+        self._emergency_active = False
+        self._emergency_btn    = None
         self.on_voice_change   = None   # callable: () -> None — rebuild session with new voice
         self.on_audio_device_change = None  # callable: () -> None — reopen audio streams
         self._confirm_overlay  = None   # live ConfirmBanner, if one is on screen
@@ -3030,10 +3840,25 @@ class MainWindow(QMainWindow):
         )
         _cam_v.addWidget(self._cam_live_lbl, stretch=1)
 
-        # Stack: 0 = animated HUD, 1 = live camera
+        # Stack: 0 = animated HUD, 1 = live camera, 2 = full weather HUD,
+        #        3 = result HUD, 4 = Local AI picker
+        self._weather_view = WeatherHudView()
+        self._weather_view.closed.connect(self._on_weather_closed)
+        self._result_hud = HudResultView()
+        self._result_hud.closed.connect(self._close_result_hud)
+        self._local_ai_hud = LocalAIHudView()
+        self._local_ai_hud.closed.connect(self._close_local_ai_hud)
+        self._local_ai_hud.selected.connect(self._on_local_ai_selected)
+        self._geo_maps_hud = GeoapifyMapsHudView()
+        self._geo_maps_hud.closed.connect(self._close_geo_maps_hud)
+
         self._hud_cam_stack = QStackedWidget()
         self._hud_cam_stack.addWidget(self.hud)
         self._hud_cam_stack.addWidget(_cam_cont)
+        self._hud_cam_stack.addWidget(self._weather_view)
+        self._hud_cam_stack.addWidget(self._result_hud)
+        self._hud_cam_stack.addWidget(self._local_ai_hud)
+        self._hud_cam_stack.addWidget(self._geo_maps_hud)
 
         self._center_split = QSplitter(Qt.Orientation.Vertical)
         self._center_split.setStyleSheet(f"""
@@ -3079,6 +3904,11 @@ class MainWindow(QMainWindow):
         self._log_sig.connect(self._log.append_log)
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
+        self._content_close_sig.connect(self._close_content)
+        self._weather_sig.connect(self._show_weather)
+        self._weather_close_sig.connect(self._close_weather_now)
+        self._privacy_sig.connect(self._apply_privacy_shield)
+        self._emergency_sig.connect(self.set_emergency_active)
         self._reconfig_sig.connect(self._show_setup)
         self._camera_sig.connect(self._show_camera_frame)
         self._confirm_sig.connect(self._show_confirm_banner)
@@ -3090,10 +3920,33 @@ class MainWindow(QMainWindow):
         self._quiz_sig.connect(self._show_quiz)
         self._quiz_hide_sig.connect(self._hide_quiz)
         self._review_sig.connect(self._show_review)
+        self._result_sig.connect(self._show_result_hud)
+        self._result_close_sig.connect(self._close_result_hud)
+        self._local_ai_sig.connect(self._show_local_ai_hud)
+        self._geo_maps_sig.connect(self._show_geo_maps)
         self._cam_stop = threading.Event()
+        self._cam_thread = None
 
         # Camera preview overlay (child of central widget, positioned in resizeEvent)
         self._cam_preview = _CameraPreview(self.centralWidget())
+
+        # Privacy shield — deliberately local to the JARVIS window.
+        self._privacy_shield = QFrame(self.centralWidget())
+        self._privacy_shield.setStyleSheet(f"""
+            QFrame {{
+                background: rgba(0, 0, 0, 245);
+                border: 1px solid {C.PRI};
+            }}
+        """)
+        _privacy_lay = QVBoxLayout(self._privacy_shield)
+        _privacy_lay.setContentsMargins(20, 20, 20, 20)
+        _privacy_label = QLabel("PRIVACY SHIELD")
+        _privacy_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        _privacy_label.setFont(QFont("Courier New", 14, QFont.Weight.Bold))
+        _privacy_label.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        _privacy_lay.addWidget(_privacy_label)
+        self._privacy_shield.hide()
+        self._privacy_shield_active = False
 
         # Clipboard panel (child of central widget, bottom-center)
         self._clipboard_panel = ClipboardPanel(self.centralWidget())
@@ -3112,6 +3965,279 @@ class MainWindow(QMainWindow):
         sc_intr = QShortcut(QKeySequence("Escape"), self)
         sc_intr.activated.connect(self._do_interrupt)
 
+    def _on_emergency_button(self) -> None:
+        try:
+            cb = self.on_emergency_kill
+            if callable(cb):
+                cb(not self._emergency_active)
+        except Exception as e:
+            self._log.append_log(f"ERR: Emergency control failed — {e}")
+
+    def set_emergency_active(self, active: bool) -> None:
+        """Update the emergency-stop button on the Qt thread."""
+        self._emergency_active = bool(active)
+        btn = self._emergency_btn
+        if btn is None:
+            return
+        if self._emergency_active:
+            btn.setText("↺ RELEASE")
+            btn.setToolTip("Release the emergency stop and resume JARVIS")
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    color: {C.ACC2}; background: #221900;
+                    border: 1px solid {C.ACC2}; border-radius: 4px; padding: 2px 8px;
+                }}
+                QPushButton:hover {{ background: #332600; }}
+            """)
+        else:
+            btn.setText("⚠ STOP")
+            btn.setToolTip("Emergency stop — halt JARVIS-controlled activity")
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    color: {C.RED}; background: transparent;
+                    border: 1px solid {C.RED}; border-radius: 4px; padding: 2px 8px;
+                }}
+                QPushButton:hover {{ background: #22000a; }}
+            """)
+
+    def _show_result_hud(self, title: str, text: str, code: bool) -> None:
+        try:
+            if self._hud_cam_stack.currentIndex() == 1:
+                self._cam_stop.set()
+            if self._weather_view.isVisible():
+                self._weather_view.close_view()
+            self._result_hud.set_result(title, text, bool(code))
+            self._hud_cam_stack.setCurrentIndex(3)
+        except Exception:
+            pass
+
+    def _close_result_hud(self) -> None:
+        try:
+            if self._hud_cam_stack.currentIndex() == 3:
+                self._hud_cam_stack.setCurrentIndex(0)
+        except Exception:
+            pass
+
+    def _show_local_ai_hud(self, payload) -> None:
+        """Slot — show the interactive Local AI model picker in the center HUD."""
+        try:
+            if self._hud_cam_stack.currentIndex() == 1:
+                self._cam_stop.set()
+            if self._weather_view.isVisible():
+                self._weather_view.close_view()
+            if self._result_hud.isVisible():
+                self._close_result_hud()
+            data = dict(payload or {})
+            self._local_ai_hud.set_models(
+                list(data.get("models") or []),
+                str(data.get("selected") or ""),
+                bool(data.get("enabled", True)),
+                bool(data.get("available", False)),
+            )
+            self._hud_cam_stack.setCurrentIndex(4)
+            self._local_ai_hud._list.setFocus(Qt.FocusReason.OtherFocusReason)
+        except Exception:
+            pass
+
+    def _on_local_ai_selected(self, model: str) -> None:
+        try:
+            from memory.config_manager import save_local_ai_model
+            save_local_ai_model(model)
+            self._log_sig.emit(f"SYS: Local AI selected — {model}")
+        except Exception as exc:
+            self._log_sig.emit(f"ERR: Could not save Local AI model — {exc}")
+
+    def _close_local_ai_hud(self) -> None:
+        try:
+            if self._hud_cam_stack.currentIndex() == 4:
+                self._hud_cam_stack.setCurrentIndex(0)
+        except Exception:
+            pass
+
+    def _load_local_ai_hud(self) -> None:
+        """Load Ollama state off the Qt thread, then emit the finished payload."""
+        try:
+            from core.local_model_router import installed_models, is_available
+            from memory.config_manager import (
+                get_local_ai_enabled, get_local_ai_model,
+            )
+            payload = {
+                "models": sorted(installed_models(refresh=True)),
+                "selected": get_local_ai_model(),
+                "enabled": get_local_ai_enabled(),
+                "available": is_available(),
+            }
+        except Exception as exc:
+            payload = {
+                "models": [],
+                "selected": "",
+                "enabled": True,
+                "available": False,
+                "error": str(exc),
+            }
+        self._local_ai_sig.emit(payload)
+
+
+    def show_geoapify_maps(self, query: str = "") -> None:
+        """Thread-safe: open Geoapify Maps in the center HUD."""
+        try:
+            self._win.show_geoapify_maps(str(query or ""))
+        except Exception:
+            pass
+
+    def is_geo_maps_hud_open(self) -> bool:
+        try:
+            return bool(self._win.is_geo_maps_hud_open())
+        except Exception:
+            return False
+
+
+    def show_local_ai_picker(self) -> None:
+        threading.Thread(
+            target=self._load_local_ai_hud,
+            daemon=True,
+            name="local-ai-hud-loader",
+        ).start()
+
+    def is_local_ai_hud_open(self) -> bool:
+        try:
+            return self._hud_cam_stack.currentIndex() == 4 and self._local_ai_hud.isVisible()
+        except Exception:
+            return False
+
+
+    def _show_geo_maps(self, query: str = "") -> None:
+        """Show the Geoapify map HUD on the Qt thread."""
+        try:
+            if self._hud_cam_stack.currentIndex() == 1:
+                self._cam_stop.set()
+            if self._weather_view.isVisible():
+                self._weather_view.close_view()
+            if self._result_hud.isVisible():
+                self._close_result_hud()
+            if self._local_ai_hud.isVisible():
+                self._close_local_ai_hud()
+            self._hud_cam_stack.setCurrentIndex(5)
+            self._geo_maps_hud.open_map(query)
+        except Exception:
+            pass
+
+    def show_geoapify_maps(self, query: str = "") -> None:
+        """Thread-safe: open/search Geoapify Maps in the center HUD."""
+        try:
+            self._geo_maps_sig.emit(str(query or ""))
+        except Exception:
+            pass
+
+    def is_geo_maps_hud_open(self) -> bool:
+        try:
+            return self._hud_cam_stack.currentIndex() == 5
+        except Exception:
+            return False
+
+    def _close_geo_maps_hud(self) -> None:
+        try:
+            if self._hud_cam_stack.currentIndex() == 5:
+                self._hud_cam_stack.setCurrentIndex(0)
+        except Exception:
+            pass
+
+    def _show_weather(self, payload) -> None:
+        """Show weather as a temporary full weather HUD, like live camera."""
+        data = dict(payload or {})
+        try:
+            self._cam_stop.set()
+        except Exception:
+            pass
+        self._weather_view.set_weather(data)
+        self._hud_cam_stack.setCurrentIndex(2)
+        self._weather_view.open_view()
+
+    def _on_weather_closed(self) -> None:
+        # A weather fade-out can finish after another center HUD (such as a
+        # Gmail/calendar result) has already taken over the stack.
+        if self._hud_cam_stack.currentIndex() == 2:
+            self._hud_cam_stack.setCurrentIndex(0)
+
+    def _close_weather_now(self) -> None:
+        try:
+            if self._weather_view.isVisible() and self._hud_cam_stack.currentIndex() == 2:
+                self._weather_view.close_view()
+            else:
+                self._hud_cam_stack.setCurrentIndex(0)
+        except Exception:
+            self._hud_cam_stack.setCurrentIndex(0)
+
+    def start_weather_view(self, payload: dict) -> None:
+        """Thread-safe entry point: show the animated weather HUD."""
+        try:
+            self._weather_sig.emit(dict(payload or {}))
+        except Exception:
+            pass
+
+    def stop_weather_view(self) -> None:
+        """Thread-safe entry point: close the animated weather HUD."""
+        try:
+            self._weather_close_sig.emit()
+        except Exception:
+            pass
+
+    def is_weather_hud_open(self) -> bool:
+        try:
+            return self._hud_cam_stack.currentIndex() == 2 and self._weather_view.isVisible()
+        except Exception:
+            return False
+
+    def is_camera_hud_open(self) -> bool:
+        try:
+            return self._hud_cam_stack.currentIndex() == 1
+        except Exception:
+            return False
+
+    def is_any_hud_open(self) -> bool:
+        try:
+            return self._hud_cam_stack.currentIndex() in (1, 2, 3, 4, 5)
+        except Exception:
+            return False
+
+    def close_active_hud(self) -> None:
+        """Close whichever temporary center HUD is currently active."""
+        try:
+            idx = self._hud_cam_stack.currentIndex()
+            if idx == 1:
+                self._cam_stop.set()
+                self._hud_cam_stack.setCurrentIndex(0)
+            elif idx == 2:
+                self._weather_view.close_view()
+                self._hud_cam_stack.setCurrentIndex(0)
+            elif idx == 3:
+                self._close_result_hud()
+            elif idx == 4:
+                self._close_local_ai_hud()
+            elif idx == 5:
+                self._close_geo_maps_hud()
+        except Exception:
+            try:
+                self._hud_cam_stack.setCurrentIndex(0)
+            except Exception:
+                pass
+
+    def _apply_privacy_shield(self, active: bool) -> None:
+        self._privacy_shield_active = bool(active)
+        if self._privacy_shield_active:
+            cw = self.centralWidget()
+            self._privacy_shield.setGeometry(cw.rect())
+            self._privacy_shield.show()
+            self._privacy_shield.raise_()
+        else:
+            self._privacy_shield.hide()
+
+    def set_privacy_shield(self, active: bool) -> None:
+        self._privacy_sig.emit(bool(active))
+
+    def privacy_shield_active(self) -> bool:
+        return bool(self._privacy_shield_active)
+
     def _show_camera_frame(self, img_bytes: bytes):
         """Slot — display camera preview overlay (main thread)."""
         self._cam_preview.show_frame(img_bytes)
@@ -3129,7 +4255,10 @@ class MainWindow(QMainWindow):
         if start:
             self._hud_cam_stack.setCurrentIndex(1)
         else:
-            self._hud_cam_stack.setCurrentIndex(0)
+            # A camera thread can finish just after weather takes over the stack.
+            # Do not let that late signal close the weather HUD.
+            if self._hud_cam_stack.currentIndex() == 1:
+                self._hud_cam_stack.setCurrentIndex(0)
             self._cam_live_lbl.clear()
 
     def _on_cam_frame(self, data: bytes) -> None:
@@ -3145,9 +4274,15 @@ class MainWindow(QMainWindow):
                 )
 
     def start_camera_stream(self) -> None:
+        # Do not start a second webcam reader when the live camera is already open.
+        if self._hud_cam_stack.currentIndex() == 1:
+            t = self._cam_thread
+            if t is not None and t.is_alive():
+                return
         self._cam_stop.clear()
         self._cam_stream_sig.emit(True)
         t = threading.Thread(target=self._cam_loop, daemon=True, name="cam-stream")
+        self._cam_thread = t
         t.start()
 
     def _cam_loop(self) -> None:
@@ -3541,6 +4676,12 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         cw = self.centralWidget()
+        if getattr(self, "_privacy_shield_active", False):
+            try:
+                self._privacy_shield.setGeometry(cw.rect())
+                self._privacy_shield.raise_()
+            except Exception:
+                pass
         if self._overlay and self._overlay.isVisible():
             ow, oh = 460, 390
             self._overlay.setGeometry(
@@ -3659,6 +4800,22 @@ class MainWindow(QMainWindow):
         self._drawer_btn.setCheckable(True)
         self._drawer_btn.clicked.connect(self._toggle_drawer)
         lay.addWidget(self._drawer_btn)
+
+        self._emergency_btn = QPushButton("⚠ STOP")
+        self._emergency_btn.setFixedHeight(26)
+        self._emergency_btn.setMinimumWidth(68)
+        self._emergency_btn.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        self._emergency_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._emergency_btn.setToolTip("Emergency stop — halt JARVIS-controlled activity")
+        self._emergency_btn.setStyleSheet(f"""
+            QPushButton {{
+                color: {C.RED}; background: transparent;
+                border: 1px solid {C.RED}; border-radius: 4px; padding: 2px 8px;
+            }}
+            QPushButton:hover {{ background: #22000a; }}
+        """)
+        self._emergency_btn.clicked.connect(self._on_emergency_button)
+        lay.addWidget(self._emergency_btn)
         lay.addStretch()
 
         mid = QVBoxLayout(); mid.setSpacing(1)
@@ -3668,7 +4825,7 @@ class MainWindow(QMainWindow):
         self._title_lbl.setFont(QFont("Courier New", 17, QFont.Weight.Bold))
         self._title_lbl.setStyleSheet(f"color: {C.PRI}; background: transparent;")
         mid.addWidget(self._title_lbl)
-        _sub_text = ("A Friendly Assistant"
+        _sub_text = ("A PowerPlay's Assistant"
                      if _disp in ("JARVIS", "J.A.R.V.I.S")
                      else "Personal AI Assistant")
         self._sub_lbl = QLabel(_sub_text)
@@ -4084,8 +5241,22 @@ class MainWindow(QMainWindow):
         self._content_ts_lbl.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
         hdr.addWidget(self._content_ts_lbl)
 
-        dismiss = QPushButton("DISMISS  ✕")
-        dismiss.setFont(QFont("Courier New", 7))
+        copy_btn = QPushButton("COPY")
+        copy_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        copy_btn.setFixedHeight(18)
+        copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.TEXT_DIM};
+                border: 1px solid {C.BORDER}; border-radius: 2px; padding: 0 5px;
+            }}
+            QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
+        """)
+        copy_btn.clicked.connect(self._copy_content)
+        hdr.addWidget(copy_btn)
+
+        dismiss = QPushButton("CLOSE  ✕")
+        dismiss.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
         dismiss.setFixedHeight(18)
         dismiss.setCursor(Qt.CursorShape.PointingHandCursor)
         dismiss.setStyleSheet(f"""
@@ -4095,7 +5266,7 @@ class MainWindow(QMainWindow):
             }}
             QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
         """)
-        dismiss.clicked.connect(w.hide)
+        dismiss.clicked.connect(self._close_content)
         hdr.addWidget(dismiss)
         lay.addLayout(hdr)
 
@@ -4106,6 +5277,8 @@ class MainWindow(QMainWindow):
         # ── text display ──────────────────────────────────────────────────────
         self._content_display = QTextEdit()
         self._content_display.setReadOnly(True)
+        self._content_display.setAcceptRichText(False)
+        self._content_display.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         self._content_display.setFont(QFont("Courier New", 8))
         self._content_display.setMinimumHeight(60)
         self._content_display.setSizePolicy(
@@ -4142,6 +5315,10 @@ class MainWindow(QMainWindow):
         self.hud.glance(0.0, -0.85, hold=1.3)
         self._content_title_lbl.setText(title.upper()[:48])
         self._content_ts_lbl.setText(_time.strftime("%H:%M:%S"))
+        if str(title or "").upper().startswith("CODE"):
+            self._content_display.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        else:
+            self._content_display.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self._content_display.setPlainText(text)
         self._content_display.moveCursor(
             self._content_display.textCursor().MoveOperation.Start
@@ -4150,7 +5327,23 @@ class MainWindow(QMainWindow):
         self._content_panel.show()
         if first_show:
             total = self._center_split.height()
-            self._center_split.setSizes([max(total - 220, 120), 220])
+            self._center_split.setSizes([max(total - 340, 120), 340])
+
+    def _copy_content(self) -> None:
+        try:
+            QApplication.clipboard().setText(self._content_display.toPlainText())
+            self._content_ts_lbl.setText("COPIED")
+            QTimer.singleShot(1400, lambda: self._content_ts_lbl.setText(""))
+        except Exception:
+            pass
+
+    def _close_content(self) -> None:
+        self._content_panel.hide()
+        try:
+            total = self._center_split.height()
+            self._center_split.setSizes([total, 0])
+        except Exception:
+            pass
 
     # ── document review ──────────────────────────────────────────────────────
     # Rendered as rich text into the content panel that already exists, rather
@@ -4520,7 +5713,7 @@ class MainWindow(QMainWindow):
 
         lay.addWidget(_fl("[F4] Mute  ·  [F11] Fullscreen"))
         lay.addStretch()
-        lay.addWidget(_fl("By FatihMakes", C.PRI_DIM))
+        lay.addWidget(_fl("By PowerPlay", C.PRI_DIM))
         return w
 
     def _on_file_selected(self, path: str):
@@ -5259,6 +6452,14 @@ class JarvisUI:
         self._win.on_interrupt = cb
 
     @property
+    def on_emergency_kill(self):
+        return self._win.on_emergency_kill
+
+    @on_emergency_kill.setter
+    def on_emergency_kill(self, cb):
+        self._win.on_emergency_kill = cb
+
+    @property
     def on_voice_change(self):
         return self._win.on_voice_change
 
@@ -5379,8 +6580,105 @@ class JarvisUI:
             time.sleep(0.1)
 
     def show_content(self, title: str, text: str):
-        """Thread-safe: display content in the panel below the HUD."""
-        self._win._content_sig.emit(title[:48], text[:4000])
+        """Thread-safe: display a result in the large center HUD viewer."""
+        self._win._result_sig.emit(
+            title[:72],
+            text[:120000],
+            str(title or "").upper().startswith("CODE"),
+        )
+
+    def is_content_open(self) -> bool:
+        try:
+            return bool(self._win._hud_cam_stack.currentIndex() == 3)
+        except Exception:
+            return False
+
+    def stop_content(self) -> None:
+        """Thread-safe: close the large center HUD result viewer."""
+        try:
+            self._win._result_close_sig.emit()
+        except Exception:
+            pass
+
+    def send_text_command(self, text: str) -> None:
+        """Thread-safe entry point used by context shortcuts."""
+        try:
+            cb = self._win.on_text_command
+            if callable(cb):
+                threading.Thread(target=cb, args=(str(text),), daemon=True).start()
+        except Exception:
+            pass
+
+    def set_privacy_shield(self, active: bool) -> None:
+        try:
+            self._win._privacy_sig.emit(bool(active))
+        except Exception:
+            pass
+
+    def privacy_shield_active(self) -> bool:
+        try:
+            return bool(self._win.privacy_shield_active())
+        except Exception:
+            return False
+
+    def show_weather(self, payload: dict) -> None:
+        """Thread-safe: show the temporary full weather HUD."""
+        try:
+            self._win._weather_sig.emit(dict(payload or {}))
+        except Exception:
+            pass
+
+    def stop_weather_view(self) -> None:
+        """Thread-safe: close the temporary weather HUD."""
+        try:
+            self._win._weather_close_sig.emit()
+        except Exception:
+            pass
+
+    def is_weather_hud_open(self) -> bool:
+        try:
+            return bool(self._win.is_weather_hud_open())
+        except Exception:
+            return False
+
+    def is_camera_hud_open(self) -> bool:
+        try:
+            return bool(self._win.is_camera_hud_open())
+        except Exception:
+            return False
+
+    def show_local_ai_picker(self) -> None:
+        """Thread-safe: load and show the Local AI model picker."""
+        try:
+            self._win.show_local_ai_picker()
+        except Exception:
+            pass
+
+    def is_local_ai_hud_open(self) -> bool:
+        try:
+            return bool(self._win.is_local_ai_hud_open())
+        except Exception:
+            return False
+
+    def is_any_hud_open(self) -> bool:
+        try:
+            return bool(self._win.is_any_hud_open())
+        except Exception:
+            return False
+
+    def close_active_hud(self) -> None:
+        """Thread-safe: close whichever temporary center HUD is active."""
+        try:
+            self._win.close_active_hud()
+        except Exception:
+            pass
+
+    def set_emergency_active(self, active: bool) -> None:
+        """Thread-safe: reflect the emergency-stop latch in the HUD."""
+        try:
+            self._win._emergency_sig.emit(bool(active))
+        except Exception:
+            pass
 
     def show_quiz(self, topic: str, questions, grade=None) -> None:
         """Thread-safe: put an interactive quiz on the board.

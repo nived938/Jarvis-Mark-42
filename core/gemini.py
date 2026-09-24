@@ -381,33 +381,74 @@ def call(contents, tier: str = FAST, config=None,
         ladder = (tier,) + tuple(m for m in _LADDERS[SMART] if m != tier)
 
     resolved_key = key or api_key()
-    if not resolved_key:
-        print("[Gemini] no Gemini API key is configured")
+    cl = None
+
+    # Cloud remains preferred. Local Ollama is only a fallback for text-only
+    # one-shot work. Grounded search stays REST-only because it needs grounding metadata.
+    if resolved_key:
+        tried = [m for m in ladder if not _cooling(m)] or list(ladder)
+        for model in tried:
+            try:
+                if model == LIVE:
+                    reply = _live_call(contents, config, timeout_ms, resolved_key)
+                    if reply is not None:
+                        return reply
+                    raise RuntimeError("the Live turn came back empty")
+                if cl is None:
+                    cl = client(timeout_ms=timeout_ms, key=resolved_key)
+                kwargs = {"model": model, "contents": contents}
+                if config is not None:
+                    kwargs["config"] = config
+                return cl.models.generate_content(**kwargs)
+            except Exception as e:
+                msg = str(e)
+                if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                    _cool(model)
+                    print(f"[Gemini] {model}: out of quota — skipping it for "
+                          f"{_COOLDOWN_SECONDS // 60} minutes")
+                else:
+                    print(f"[Gemini] {model}: {type(e).__name__}: {msg[:140]}")
+    else:
+        print("[Gemini] no Gemini API key is configured; trying local AI fallback")
+
+    if tier == SEARCH:
         return None
 
-    cl = None
-    tried = [m for m in ladder if not _cooling(m)] or list(ladder)
-    for model in tried:
+    plain_parts = contents if isinstance(contents, (list, tuple)) else [contents]
+    local_text_parts = []
+    has_binary = False
+    for item in plain_parts:
+        if isinstance(item, str):
+            local_text_parts.append(item)
+            continue
+        if getattr(item, "inline_data", None) is not None:
+            has_binary = True
+            break
+        text_part = getattr(item, "text", None)
+        if text_part:
+            local_text_parts.append(text_part)
+        elif isinstance(item, dict) and item.get("text"):
+            local_text_parts.append(str(item["text"]))
+
+    if not has_binary and local_text_parts:
         try:
-            if model == LIVE:
-                reply = _live_call(contents, config, timeout_ms, resolved_key)
-                if reply is not None:
-                    return reply
-                raise RuntimeError("the Live turn came back empty")
-            if cl is None:
-                cl = client(timeout_ms=timeout_ms, key=resolved_key)
-            kwargs = {"model": model, "contents": contents}
+            from core.local_model_router import fallback_text
+            system = ""
             if config is not None:
-                kwargs["config"] = config
-            return cl.models.generate_content(**kwargs)
+                system = getattr(config, "system_instruction", None) or ""
+                if isinstance(config, dict):
+                    system = config.get("system_instruction", "") or ""
+            answer = fallback_text(
+                "\n\n".join(local_text_parts),
+                tier=tier if tier in (FAST, SMART) else FAST,
+                system=system,
+                timeout=max(15.0, timeout_ms / 1000.0),
+            )
+            if answer:
+                return _Reply(answer)
         except Exception as e:
-            msg = str(e)
-            if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
-                _cool(model)
-                print(f"[Gemini] {model}: out of quota — skipping it for "
-                      f"{_COOLDOWN_SECONDS // 60} minutes")
-            else:
-                print(f"[Gemini] {model}: {type(e).__name__}: {msg[:140]}")
+            print(f"[LocalAI] fallback exception: {e}")
+
     return None
 
 

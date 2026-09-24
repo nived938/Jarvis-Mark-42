@@ -47,6 +47,7 @@ qrcode[pil]>=7,<9
 # ── Plugin extras: Gmail / Google Calendar (OAuth) ────────────────────────────
 google-api-python-client
 google-auth-oauthlib
+mediapipe>=0.10.33,<1
 
 # ── Plugin extras: Tuya / Smart Life smart light (home_assistant) ─────────────
 tinytuya
@@ -81,6 +82,10 @@ pynvml                       # system_monitor + the HUD's GPU meter (NVIDIA)
 #   pip install pydub        # file_processor: audio metadata and conversion
 #                            #   (also needs ffmpeg on PATH for most formats)
 #   pip install mediapipe    # pushup_counter: elbow-angle rep detection
+
+# ── Local phrase wake ("wake up Jarvis") ──────────────────────────────────────
+# Used by the manual JARVIS sleep state. Hey Jarvis still uses openwakeword.
+vosk
 
 # ── Optional: local wake word ("Hey Jarvis") ──────────────────────────────────
 # Deliberately NOT installed by default — it's opt-in. Enable it (and download

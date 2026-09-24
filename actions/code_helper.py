@@ -1,4 +1,5 @@
 import subprocess
+import shutil
 import sys
 import json
 import re
@@ -19,6 +20,8 @@ MAX_BUILD_ATTEMPTS = 3
 # fallback ladder. Writing a model name here is what left this file hanging
 # forever whenever that one alias was unwell.
 from core import gemini
+from core.undo import push_undo
+from core.self_modification import is_guarded_path, stage_write
 
 
 def _get_api_key() -> str:
@@ -310,40 +313,132 @@ def _write_action(description, language, output_path, player) -> str:
         return f"Could not generate code: {e}"
 
 
-def _edit_action(file_path, instruction, player) -> str:
+def _validate_generated_code(path: Path, code: str) -> tuple[bool, str]:
+    """Validate generated source with a cheap language-specific check."""
+    suffix = path.suffix.lower()
+    try:
+        if suffix == ".py":
+            compile(code, str(path), "exec")
+            return True, "Python syntax OK."
+        if suffix == ".json":
+            json.loads(code)
+            return True, "JSON syntax OK."
+        if suffix in (".js", ".mjs", ".cjs") and shutil.which("node"):
+            import tempfile
+            with tempfile.NamedTemporaryFile("w", suffix=suffix, delete=False, encoding="utf-8") as f:
+                tmp = Path(f.name)
+                f.write(code)
+            try:
+                proc = subprocess.run(
+                    ["node", "--check", str(tmp)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=15,
+                )
+            finally:
+                tmp.unlink(missing_ok=True)
+            if proc.returncode != 0:
+                return False, (proc.stderr or proc.stdout or "JavaScript syntax check failed.").strip()[:2000]
+            return True, "JavaScript syntax OK."
+    except SyntaxError as e:
+        return False, f"Syntax error: {e}"
+    except json.JSONDecodeError as e:
+        return False, f"JSON syntax error: {e}"
+    except Exception as e:
+        return False, f"Validation error: {e}"
+    return True, "No language-specific validator available; file accepted."
+
+
+def _edit_action(file_path, instruction, player, verify: bool = True) -> str:
     if not file_path:
         return "Please provide a file path to edit, sir."
     if not instruction:
         return "Please describe what change to make, sir."
 
-    content, err = _read_file(file_path)
+    path = Path(file_path)
+    original, err = _read_file(file_path)
     if err:
         return err
 
     if player:
         player.write_log("[Code] Editing file...")
 
-    model  = _get_gemini()
-    prompt = f"""You are an expert code editor.
+    model = _get_gemini()
+    edited = ""
+    last_error = ""
+
+    for attempt in range(1, 4):
+        if attempt == 1:
+            prompt = f"""You are an expert code editor.
 Apply the following change to the code below.
-Return ONLY the complete updated code — no explanation, no markdown, no backticks.
+Return ONLY the complete updated code. No explanation or markdown.
 
 Change: {instruction}
 
 Original code:
-{content}
+{original}
 
 Updated code:"""
+        else:
+            prompt = f"""Repair the following code edit.
+Preserve the requested change and return ONLY the complete corrected code.
+
+Requested change: {instruction}
+Validation error:
+{last_error[:2000]}
+
+Current code:
+{edited}
+"""
+        try:
+            response = model.generate_content(prompt)
+            edited = _clean_code(response.text)
+        except Exception as e:
+            return f"Could not edit code: {e}"
+
+        if not verify:
+            break
+
+        ok, detail = _validate_generated_code(path, edited)
+        if ok:
+            break
+
+        last_error = detail
+        if player:
+            player.write_log(f"[Code] Validation failed, repairing edit ({attempt}/3)...")
+        if attempt == 3:
+            return f"Edit rejected because validation kept failing: {detail}"
+
+    # Edits to JARVIS itself are never written directly. The generated code
+    # has passed local validation, then goes through the human-owned confirmation
+    # gate in core.self_modification.
+    if is_guarded_path(path):
+        return stage_write(path, edited, reason=instruction, player=player)
 
     try:
-        response = model.generate_content(prompt)
-        edited   = _clean_code(response.text)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(edited, encoding="utf-8")
     except Exception as e:
-        return f"Could not edit code: {e}"
+        return f"Could not save edited file: {e}"
 
-    status = _save_file(Path(file_path), edited)
+    previous = original
+
+    def _undo_edit(p=path, old=previous):
+        p.write_text(old, encoding="utf-8")
+        return f"Restored {p.name} to its previous contents."
+
+    push_undo(f"edited {path.name}", _undo_edit)
+
+    validation = ""
+    if verify:
+        _ok, detail = _validate_generated_code(path, edited)
+        validation = f"\n\nValidation: {detail}"
+
     print(f"[Code] ✅ Edited: {file_path}")
-    return f"File edited. {status}\n\nPreview:\n{_preview(edited)}"
+    return f"File edited. Saved to: {path}{validation}\n\nPreview:\n{_preview(edited)}"
+
 
 
 def _explain_action(file_path, code, player) -> str:
@@ -425,6 +520,9 @@ Optimized code:"""
         save_path = Path(file_path)
     else:
         save_path = _resolve_save_path(output_path, lang)
+
+    if is_guarded_path(save_path):
+        return stage_write(save_path, optimized, reason="optimize JARVIS source", player=player)
 
     status = _save_file(save_path, optimized)
     print(f"[Code] ✅ Optimized: {save_path}")
@@ -551,6 +649,7 @@ def code_helper(
     code        = p.get("code", "").strip()
     args        = p.get("args", [])
     timeout     = int(p.get("timeout", 30))
+    verify      = bool(p.get("verify", True))
 
     if action == "auto":
         action = _detect_intent(description, file_path, code)
@@ -563,7 +662,8 @@ def code_helper(
         return _edit_action(
             file_path,
             description or p.get("instruction", ""),
-            player
+            player,
+            verify=verify,
         )
 
     elif action == "explain":
@@ -623,6 +723,10 @@ TOOL = {
             "timeout": {
                 "type": "INTEGER",
                 "description": "Execution timeout in seconds (default: 30)"
+            },
+            "verify": {
+                "type": "BOOLEAN",
+                "description": "For edits, validate the generated file and repair validation failures up to 3 times. Default true."
             }
         },
         "required": [

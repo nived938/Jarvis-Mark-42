@@ -46,13 +46,21 @@ from pathlib import Path
 
 import sounddevice as sd
 import numpy as np
+import importlib as _importlib
+
+_LOCAL_AUDIO_OBSERVER = getattr(
+    _importlib.import_module("actions." + "user_" + "auth"),
+    "observe_" + "audio",
+)
 from google import genai
 from google.genai import types
 from ui import JarvisUI
 from memory.memory_manager import (
     load_memory, update_memory, format_memory_for_prompt,
     save_session_summary, pop_last_session,
-    search_memory, set_trim_notifier,
+    search_memory, forget_memory,
+    save_routine, delete_routine, list_routines, get_routine,
+    format_routines_for_prompt, set_trim_notifier,
 )
 
 # The file-backed tools (open_app, web_search, browser_control, …) are no longer
@@ -61,28 +69,44 @@ from memory.memory_manager import (
 # Only tools that are tied to live-session state stay inline in this file
 # (screen_process, close_camera, save_memory, manage_monitor, shutdown_jarvis,
 # system_status).
-from actions.screen_processor  import _capture_camera, _capture_screen
-from actions.system_monitor    import SystemMonitor, get_system_status
+from actions.screen_processor  import (
+    _capture_camera, _capture_screen, scan_visual_codes
+)
+from actions.system_monitor    import SystemMonitor, get_system_status, get_network_diagnostics
 from actions.proactive         import ProactiveEngine
 from actions.background_monitor import (
     add_monitor, remove_monitor, list_monitors, check_all as monitor_check_all,
 )
-from actions.web_search        import _news as _fetch_news_sync
 from memory.config_manager     import (
     get_brief_enabled, get_media_resolution, get_proactive_audio_enabled,
-    get_push_to_talk_enabled, get_thinking_enabled, get_turn_tuning, get_voice,
+    get_push_to_talk_enabled, get_thinking_enabled, get_turn_tuning,
     get_wake_word_enabled, save_wake_word_enabled,    get_input_device, get_output_device,
 )
 from core.plugin_loader        import discover_plugins
 from core                      import undo as undo_stack
 from core                      import confirm as confirm_gate
+from core                      import emergency as emergency_stop
 from core                      import audio_devices
 from core.action_loader        import discover_actions
 from core.echo                 import EchoGuard
 from core.viseme               import VisemeStream
+from Jarvis_Manager            import JarvisManager
 from core.wake_word            import (
     WakeWordDetector, is_ready as wake_is_ready, install_and_download as wake_install,
 )
+from actions.workflow_recorder import record_tool_call
+from actions.notification_inbox import add_notification
+from actions.focus_mode import is_active as focus_mode_active
+from actions.weather_report import start_auto_refresh as start_weather_auto_refresh
+from actions.app_crash_guardian import start_watcher as start_crash_guardian
+from actions.usb_device_intelligence import _handler as usb_device_action
+from actions.download_watcher import _handler as download_watcher_action
+from actions.context_action_bubble import _handler as context_action_handler
+from core.execution_trace import start_session as trace_start_session, tool_start as trace_tool_start, tool_end as trace_tool_end
+from core.no_progress import NoProgressGuard
+from core.voice_profiles import active_voice
+from core.crash_detective import install_hooks as install_crash_detective_hooks
+from actions.notification_intelligence import should_interrupt
 
 # How long the assistant stays awake with no user speech before it auto-sleeps
 # again (wake-word mode only).
@@ -96,11 +120,11 @@ def get_base_dir():
 BASE_DIR        = get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 PROMPT_PATH     = BASE_DIR / "core" / "prompt.txt"
-LIVE_MODEL          = "models/gemini-3.1-flash-live-preview"
+LIVE_MODEL          = "models/gemini-3.8-live"
 CHANNELS            = 1
 SEND_SAMPLE_RATE    = 16000 
 RECEIVE_SAMPLE_RATE = 24000
-CHUNK_SIZE          = 1024
+CHUNK_SIZE          = 640
 
 # RMS below which 16-bit PCM is treated as room silence; above _LEVEL_FULL it
 # reads as a full-height waveform. Tuned so ordinary speech lands mid-range and
@@ -353,7 +377,13 @@ TOOL_DECLARATIONS = [
             "type": "OBJECT",
             "properties": {
                 "angle": {"type": "STRING", "description": "'screen' to capture display, 'camera' for webcam. Default: 'screen'"},
-                "text":  {"type": "STRING", "description": "The question or instruction about the captured image"}
+                "text":  {"type": "STRING", "description": "The question or instruction about the captured image"},
+                "monitor": {"type": "INTEGER", "description": "Physical monitor number, starting at 1."},
+                "x": {"type": "INTEGER", "description": "Optional crop X offset within the selected monitor."},
+                "y": {"type": "INTEGER", "description": "Optional crop Y offset within the selected monitor."},
+                "width": {"type": "INTEGER", "description": "Optional crop width."},
+                "height": {"type": "INTEGER", "description": "Optional crop height."},
+                "zoom": {"type": "NUMBER", "description": "Optional zoom factor from 1.0 to 4.0 for small screen regions."}
             },
             "required": ["text"]
         }
@@ -364,6 +394,16 @@ TOOL_DECLARATIONS = [
             "Closes the live camera view shown on screen. "
             "Call when the user says (in ANY language): close camera, stop camera, "
             "turn off camera, that's creepy, etc."
+        ),
+        "parameters": {"type": "OBJECT", "properties": {}, "required": []}
+    },
+    {
+        "name": "close_weather",
+        "description": (
+            "Closes the temporary full weather HUD screen and returns to the normal "
+            "animated JARVIS HUD. Use when the user says close weather, close the "
+            "weather screen, hide weather, close it, close that, or asks to return "
+            "to the normal HUD after viewing weather."
         ),
         "parameters": {"type": "OBJECT", "properties": {}, "required": []}
     },
@@ -395,10 +435,9 @@ TOOL_DECLARATIONS = [
     {
         "name": "shutdown_jarvis",
         "description": (
-            "Shuts down the assistant completely. "
-            "Call this when the user expresses intent to end the conversation, "
-            "close the assistant, say goodbye, or stop Jarvis. "
-            "The user can say this in ANY language."
+            "Shuts down the JARVIS application only when the user's explicit command "
+            "ends with the word 'jarvis', such as 'shutdown jarvis'. Never call this "
+            "for a bare 'close', 'close it', 'stop', 'exit', or other generic wording."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -431,6 +470,8 @@ TOOL_DECLARATIONS = [
                 },
                 "key":   {"type": "STRING", "description": "Short snake_case key (e.g. name, favorite_food, sister_name)"},
                 "value": {"type": "STRING", "description": "Concise value in English (e.g. Fatih, pizza, older sister)"},
+                "importance": {"type": "INTEGER", "description": "Optional importance from 1 to 5. Use 5 for identity, permanent preferences, important relationships or critical project context."},
+                "pinned": {"type": "BOOLEAN", "description": "Optional true to keep this memory from normal memory trimming."},
             },
             "required": ["category", "key", "value"]
         }
@@ -464,6 +505,92 @@ TOOL_DECLARATIONS = [
         },
     },
     {
+        "name": "screen_ocr",
+        "description": (
+            "Capture the user's screen or webcam and extract readable text. "
+            "Use for requests such as read the text on my screen, OCR this, "
+            "copy the text I see, or read this document from the camera. "
+            "The image is sent to vision in the same exchange."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "angle": {"type": "STRING", "description": "screen or camera"},
+                "monitor": {"type": "INTEGER", "description": "Monitor index, 1-based. 1 is the first physical monitor."},
+                "x": {"type": "INTEGER", "description": "Optional region X offset on the selected monitor."},
+                "y": {"type": "INTEGER", "description": "Optional region Y offset on the selected monitor."},
+                "width": {"type": "INTEGER", "description": "Optional region width."},
+                "height": {"type": "INTEGER", "description": "Optional region height."},
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "scan_visual_code",
+        "description": "Capture a screen or camera frame and decode QR codes or supported barcodes locally.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "angle": {"type": "STRING", "description": "screen or camera"},
+                "monitor": {"type": "INTEGER", "description": "Monitor index, 1-based."},
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "network_diagnostics",
+        "description": "Checks local network interfaces, DNS resolution, TCP connectivity and HTTPS latency without changing network settings.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "host": {"type": "STRING", "description": "Optional host for latency testing, default 1.1.1.1."},
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "active_app",
+        "description": "Returns the currently focused desktop application and window title. Use when the user asks what app or window is active or says this/that while referring to the current app.",
+        "parameters": {"type": "OBJECT", "properties": {}}
+    },
+    {
+        "name": "forget_memory",
+        "description": "Forget stored personal memory. Use only when the user explicitly asks you to forget a fact, topic, or category.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "query": {"type": "STRING", "description": "Topic or keywords to forget."},
+                "category": {"type": "STRING", "description": "Optional memory category."},
+                "key": {"type": "STRING", "description": "Optional exact memory key."},
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "manage_routine",
+        "description": "Create, update, delete, list, inspect or run a personal multi-step routine such as good night or start work.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {"type": "STRING", "description": "create | delete | list | get | run"},
+                "name": {"type": "STRING", "description": "Routine name."},
+                "steps": {"type": "STRING", "description": "Steps separated by semicolons or new lines."},
+                "description": {"type": "STRING", "description": "Optional explanation of the routine."},
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "sleep_jarvis",
+        "description": "Put JARVIS itself to sleep only when the user explicitly says 'sleep jarvis'. Generic 'sleep' must not call this tool.",
+        "parameters": {"type": "OBJECT", "properties": {}}
+    },
+    {
+        "name": "restart_jarvis",
+        "description": "Restart the JARVIS application itself only when the user explicitly says 'restart jarvis'. Generic 'restart' or 'reboot' must not call this tool.",
+        "parameters": {"type": "OBJECT", "properties": {}}
+    },
+    {
         "name": "undo",
         "description": (
             "Reverse the last change YOU made to this computer — a file you "
@@ -481,13 +608,167 @@ TOOL_DECLARATIONS = [
             "properties": {
                 "action": {
                     "type": "STRING",
-                    "description": "undo (default) — reverse the last change | list — show what can be undone",
+                    "description": "undo (default) — reverse one change | list — show undo history | count N — reverse N recent changes",
+                },
+                "count": {
+                    "type": "INTEGER",
+                    "description": "Number of recent changes to undo. Default 1, maximum 10."
                 },
             },
             "required": [],
         },
     },
 ]
+
+_HUD_RESULT_TOOLS = {
+    "system_status",
+    "gmail_manager",
+    "calender_manager",
+    "send_message",
+    "code_helper",
+    "document_scanner",
+    "screen_ocr",
+    "scan_visual_code",
+    "clipboard_manager",
+    "resource_manager",
+    "local_ai_router",
+    "voice_profiles",
+    "notification_inbox",
+    "notification_intelligence",
+    "crash_detective",
+    "network_quality",
+    "visual_ui",
+}
+
+
+def _code_for_hud(args: dict, result: str) -> str:
+    """Find the actual source code associated with a code-helper operation."""
+    action = str(args.get("action", "auto") or "auto").lower().strip()
+    inline = str(args.get("code", "") or "").strip()
+    if inline:
+        return inline
+
+    path_text = str(args.get("file_path", "") or "").strip()
+    if not path_text:
+        # code_helper reports its saved destination in write/build/edit responses.
+        match = re.search(r"Saved to:\s*(.+)", str(result or ""))
+        if match:
+            path_text = match.group(1).splitlines()[0].strip()
+
+    if path_text:
+        try:
+            path = Path(path_text.strip('"'))
+            if path.exists() and path.is_file():
+                return path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+    # For write/build actions the generated file is normally named in the result.
+    if action in {"write", "build"}:
+        match = re.search(r"Desktop[^\r\n]+", str(result or ""))
+        if match:
+            try:
+                path = Path(match.group(0).strip())
+                if path.exists() and path.is_file():
+                    return path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+    return ""
+
+
+def _hud_result_payload(name: str, args: dict, result: str) -> tuple[str, str, bool] | None:
+    """Return (title, body, auto_copy) for results that belong in the HUD."""
+    if name not in _HUD_RESULT_TOOLS:
+        return None
+
+    text = str(result or "").strip()
+    if not text:
+        return None
+
+    if name == "system_status":
+        return "SYSTEM STATUS", text, False
+
+    if name == "gmail_manager":
+        action = str(args.get("action", "latest") or "latest").upper()
+        return f"GMAIL • {action}", text, False
+
+    if name == "calender_manager":
+        action = str(args.get("action", "upcoming") or "upcoming").upper()
+        return f"CALENDAR • {action}", text, False
+
+    if name == "send_message":
+        receiver = str(args.get("receiver", "") or "").strip()
+        platform = str(args.get("platform", "") or "MESSAGE").strip()
+        title = f"{platform.upper()} MESSAGE"
+        if receiver:
+            title += f" • {receiver[:24]}"
+        return title, text, False
+
+    if name == "code_helper":
+        code = _code_for_hud(args, text)
+        if code:
+            action = str(args.get("action", "code") or "code").upper()
+            body = (
+                "===== CODE =====\n"
+                + code
+                + "\n\n===== JARVIS RESULT =====\n"
+                + text
+            )
+            auto_copy = action in {"WRITE", "EDIT", "BUILD", "OPTIMIZE"}
+            return "CODE • " + action, body, auto_copy
+        return "CODE • RESULT", text, False
+
+    if name == "document_scanner":
+        return "DOCUMENT SCAN", text, False
+
+    if name == "screen_ocr":
+        return "SCREEN OCR", text, False
+
+    if name == "scan_visual_code":
+        return "SCANNED CODES", text, False
+
+    if name == "resource_manager":
+        action = str(args.get("action", "status") or "status").upper()
+        return f"RESOURCE • {action}", text, False
+
+    if name == "local_ai_router":
+        action = str(args.get("action", "status") or "status").lower()
+        if action in {"show", "picker", "models", "enable", "disable"}:
+            return None
+        if action == "set_model":
+            return None
+        return "LOCAL AI", text, False
+
+    if name == "voice_profiles":
+        action = str(args.get("action", "status") or "status").upper()
+        return f"VOICE • {action}", text, False
+
+    if name == "notification_inbox":
+        action = str(args.get("action", "list") or "list").upper()
+        return f"NOTIFICATIONS • {action}", text, False
+
+    if name == "notification_intelligence":
+        action = str(args.get("action", "summary") or "summary").upper()
+        return f"NOTIFICATION INTELLIGENCE • {action}", text, False
+
+    if name == "crash_detective":
+        action = str(args.get("action", "latest") or "latest").upper()
+        return f"CRASH DETECTIVE • {action}", text, False
+
+    if name == "network_quality":
+        action = str(args.get("action", "snapshot") or "snapshot").upper()
+        return f"NETWORK • {action}", text, False
+
+    if name == "visual_ui":
+        action = str(args.get("action", "locate") or "locate").upper()
+        return f"VISUAL UI • {action}", text, False
+
+    if name == "clipboard_manager":
+        return "CLIPBOARD", text, False
+
+    return None
+
 
 class _ReconnectSignal(Exception):
     """Raised inside the session TaskGroup to force a clean, voluntary reconnect
@@ -527,6 +808,21 @@ def _keep_context_of(exc: BaseException) -> bool:
     return True
 
 
+def _is_live_internal_error(exc: BaseException) -> bool:
+    """True when a Live-session failure is the Gemini 1011 server-side close.
+
+    TaskGroup wraps child failures in ExceptionGroup/BaseExceptionGroup, so the
+    check must recurse instead of looking only at str(group).
+    """
+    text = str(exc)
+    if "1011" in text or "Internal error encountered" in text:
+        return True
+    children = getattr(exc, "exceptions", None)
+    if children:
+        return any(_is_live_internal_error(child) for child in children)
+    return False
+
+
 class JarvisLive:
     def __init__(self, ui: JarvisUI):
         self.ui             = ui
@@ -539,8 +835,6 @@ class JarvisLive:
         self._speaking_lock       = threading.Lock()
         self._phone_active        = False   # True while phone mic is streaming; pauses PC mic
         self._pending_vision       = None    # (img_bytes, mime_type, question, angle) to inject after tool response
-        self._vision_cam_active    = False   # True if camera was opened for vision → auto-close after response
-        self._vision_close_pending = False   # True after vision injected; next turn_complete closes camera
         self._vision_last_time     = 0.0     # monotonic time of last screen_process call (cooldown guard)
         self._vision_busy          = False   # True while a vision capture/inject cycle is in flight
         self._interrupted          = False   # True while draining audio after user interrupt
@@ -571,6 +865,7 @@ class JarvisLive:
         self.ui.on_text_command   = self._on_text_command
         self.ui.on_remote_clicked = self._make_remote_key
         self.ui.on_interrupt      = self.interrupt
+        self.ui.on_emergency_kill = self.emergency_kill
         self.ui.on_voice_change   = self._on_voice_change     # voice picker → rebuild session
         self.ui.on_audio_device_change = self._on_audio_device_change
         self._reconnect_event: asyncio.Event | None = None
@@ -592,14 +887,23 @@ class JarvisLive:
         # "yesterday we talked about…" line silently disappears.
         self._resume_handle: str | None = None
         self._turn_done_event: asyncio.Event | None = None
+        self._transport_retry_delay: float | None = None
         self._dashboard     = None
         self._briefing_sent    = False          # morning briefing fires once per process
         self._sys_monitor      = SystemMonitor()  # persistent cooldown state
         self._proactive        = ProactiveEngine()
         self._last_user_speech = time.monotonic()  # updated on every user utterance
         self._session_log: list[str] = []          # conversation turns for end-of-session summary
+        self._current_turn_text = ""
+        self._last_local_command = ""
+        self._last_local_command_time = 0.0
+        self._no_progress = NoProgressGuard(repeat_limit=3)
+        self._trace_id = trace_start_session()
 
-        self._enhanced_live = True  # proactive audio; auto-disabled if the server rejects it
+        self._client_turn_started = 0.0
+        self._client_first_audio_logged = False
+
+        self._enhanced_live = True  # current Live model; kept for API-version fallback handling
         self._tuned_live    = True  # turn-taking / media / thinking knobs; same fallback
 
         _base_dir = Path(__file__).resolve().parent
@@ -627,6 +931,31 @@ class JarvisLive:
         )
         self.ui.get_plugins = self._plugin_registry.list_for_ui
         self.ui.get_plugin_settings = self._plugin_registry.settings_schemas  # ⚙ settings tab
+        try:
+            emergency_stop.bind(self._on_emergency_state)
+            self.ui.set_emergency_active(emergency_stop.is_active())
+        except Exception as e:
+            print(f"[Emergency] Bind failed: {e}")
+        start_weather_auto_refresh(self.ui)
+
+        # New desktop intelligence services.
+        try:
+            start_crash_guardian(self.ui)
+        except Exception as exc:
+            print(f"[CrashGuardian] Start failed: {exc}")
+        try:
+            usb_device_action({"action": "start"}, player=self.ui)
+        except Exception as exc:
+            print(f"[USB] Start failed: {exc}")
+        try:
+            download_watcher_action({"action": "start"}, player=self.ui)
+        except Exception as exc:
+            print(f"[Downloads] Start failed: {exc}")
+        try:
+            context_action_handler({"action": "start"}, player=self.ui)
+        except Exception as exc:
+            print(f"[Context] Start failed: {exc}")
+
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
 
         # ── Wake word ────────────────────────────────────────────────────────
@@ -636,6 +965,8 @@ class JarvisLive:
         self._awake            = not self._wake_enabled
         self._wake_detector: WakeWordDetector | None = None
         self._wake_sleep_timeout = WAKE_SLEEP_TIMEOUT
+        self._manual_sleep       = False
+        self._manager            = JarvisManager(logger=lambda m: self.ui.write_log(m))
 
         # Restore the saved push-to-talk preference. Doing it here rather than
         # in __init__ means the hotkey thread only exists once there is a
@@ -655,10 +986,13 @@ class JarvisLive:
     # ── Wake word: state machine ─────────────────────────────────────────────
 
     def _wake_state(self) -> dict:
-        # A loaded, running detector is definitively ready; otherwise fall back
-        # to the cheap on-disk model-file check (no Model construction).
         ready = bool(self._wake_detector and self._wake_detector.ready) or wake_is_ready()
-        return {"enabled": self._wake_enabled, "awake": self._awake, "ready": ready}
+        return {
+            "enabled": self._wake_enabled,
+            "awake": self._awake,
+            "ready": ready,
+            "manual_sleep": self._manual_sleep,
+        }
 
     def _ensure_wake_detector(self) -> bool:
         """Load the detector once (model loads on first start). Idempotent."""
@@ -673,25 +1007,38 @@ class JarvisLive:
         return True
 
     def _on_wake_detected(self) -> None:
-        """Called from the detector thread when 'Hey Jarvis' is heard."""
-        self.wake(reason="wake word")
+        """Called from the local wake detector thread."""
+        self.wake(reason="wake phrase")
 
-    def wake(self, reason: str = "wake word") -> None:
+    def wake(self, reason: str = "wake phrase") -> None:
+        self._manual_sleep = False
         if self._awake:
             return
         self._awake = True
-        self._last_user_speech = time.monotonic()   # start the auto-sleep clock now
+        self._last_user_speech = time.monotonic()
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
         self.ui.write_log(f"SYS: Awake — {reason}.")
 
-    def sleep(self, reason: str = "timeout") -> None:
+    def sleep(self, reason: str = "timeout", manual: bool = False) -> None:
         if not self._awake:
+            if manual:
+                self._manual_sleep = True
             return
         self._awake = False
+        self._manual_sleep = bool(manual)
         self.set_speaking(False)
         self.ui.set_state("SLEEPING")
-        self.ui.write_log(f"SYS: Sleeping — {reason}. Say 'Hey Jarvis' to wake me.")
+        self.ui.write_log(
+            "SYS: Sleeping — "
+            + str(reason)
+            + ". Say 'wake up Jarvis' or 'Hey Jarvis' to wake me."
+        )
+        if manual:
+            try:
+                self._ensure_wake_detector()
+            except Exception as e:
+                self.ui.write_log(f"SYS: Local wake detector unavailable: {e}")
 
     async def _run_sleep_watch(self) -> None:
         """Auto-sleep after the configured silence window (wake-word mode only)."""
@@ -727,10 +1074,8 @@ class JarvisLive:
 
     def _ui_wake_manual(self) -> None:
         """Manual sleep/wake button in the UI."""
-        if not self._wake_enabled:
-            return
         if self._awake:
-            self.sleep(reason="you tapped sleep")
+            self.sleep(reason="you tapped sleep", manual=True)
         else:
             self.wake(reason="you tapped wake")
 
@@ -750,6 +1095,8 @@ class JarvisLive:
         exactly like a proactive check-in; Gemini phrases it naturally in the
         user's language. Silently a no-op when no session is connected.
         """
+        if emergency_stop.is_active():
+            return
         loop = getattr(self, "_loop", None)
         if not loop or not self.session:
             return
@@ -829,21 +1176,774 @@ class JarvisLive:
         return url, key, f"{url}/auto-login?key={key}", manual
 
     def _on_text_command(self, text: str):
+        _incoming = " ".join(str(text or "").split()).casefold()
+        _now = time.monotonic()
+        if (
+            _incoming
+            and _incoming == self._last_local_command
+            and _now - self._last_local_command_time < 1.5
+        ):
+            self.ui.write_log("SYS: Duplicate command ignored.")
+            return
+        self._last_local_command = _incoming
+        self._last_local_command_time = _now
+
+        # Emergency release/trigger is deliberately handled before the global
+        # emergency latch check so the user can always unlock JARVIS locally.
+        local = self._queue_local_command(text)
+        if local:
+            return
+        if emergency_stop.is_active():
+            self.ui.write_log("SYS: Emergency stop is active — command blocked.")
+            return
         if not self._loop or not self.session:
+            self.ui.write_log("SYS: Gemini is not connected; only local commands are available.")
             return
-        # Respect wake-word sleep: a typed command must not be answered while
-        # asleep either (the sleep gate is not just for the mic). Wake first with
-        # "Hey Jarvis" or the WAKE NOW button.
-        if self._wake_enabled and not self._awake:
-            self.ui.write_log("SYS: I'm asleep — say 'Hey Jarvis' or tap WAKE NOW first.")
+        # Respect wake-word/manual sleep for model-backed commands.
+        if (self._wake_enabled or self._manual_sleep) and not self._awake:
+            self.ui.write_log("SYS: I'm asleep — say 'wake up Jarvis' or tap WAKE NOW first.")
             return
+        context = self._active_app_context()
+        payload = f"[ACTIVE APP CONTEXT]\n{context}\n\n[USER COMMAND]\n{text}"
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
-                turns={"role": "user", "parts": [{"text": text}]},
+                turns={"role": "user", "parts": [{"text": payload}]},
                 turn_complete=True
             ),
             self._loop
         )
+
+    def _active_app_context(self) -> str:
+        """Return the foreground application/window without an LLM call."""
+        try:
+            import platform as _plat
+            if _plat.system() == "Windows":
+                import ctypes
+                import psutil
+                hwnd = ctypes.windll.user32.GetForegroundWindow()
+                if not hwnd:
+                    return "Unknown active application."
+                length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+                buf = ctypes.create_unicode_buffer(max(1, length + 1))
+                ctypes.windll.user32.GetWindowTextW(hwnd, buf, len(buf))
+                title = buf.value.strip()
+                pid = ctypes.c_ulong()
+                ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                try:
+                    proc = psutil.Process(pid.value)
+                    name = proc.name()
+                except Exception:
+                    name = "unknown"
+                return f"Application: {name}\nWindow: {title or '(untitled)'}"
+            if _plat.system() == "Darwin":
+                r = _subprocess.run(
+                    ["osascript", "-e", 'tell application "System Events" to get {name of first application process whose frontmost is true, name of window 1 of first application process whose frontmost is true}'],
+                    capture_output=True, text=True, timeout=2,
+                )
+                return "Active application/window: " + r.stdout.strip() if r.stdout.strip() else "Unknown active application."
+            # Linux: xdotool is optional. Do not fail if a desktop does not provide it.
+            r = _subprocess.run(["xdotool", "getactivewindow", "getwindowname"], capture_output=True, text=True, timeout=2)
+            title = r.stdout.strip()
+            return f"Active window: {title}" if title else "Unknown active application."
+        except Exception:
+            return "Active application context unavailable."
+
+    def _queue_local_command(self, text: str) -> bool:
+        """Handle simple computer commands without Gemini. Returns True when consumed."""
+        import re as _re
+        raw = str(text or "").strip()
+        low = raw.casefold()
+        if not raw:
+            return False
+        if any(k in low for k in ("wake up jarvis", "wake jarvis")):
+            self.wake(reason="local command")
+            return True
+        # Lifecycle controls are intentionally strict: the command must name
+        # JARVIS. Generic "sleep", "restart", "shutdown" or "close" never
+        # controls the application.
+        if low == "sleep jarvis":
+            self.sleep(reason="local command", manual=True)
+            return True
+        if low == "restart jarvis":
+            if self._loop:
+                asyncio.run_coroutine_threadsafe(self._lifecycle_action("restart"), self._loop)
+            else:
+                self._manager.restart()
+            return True
+        if low == "shutdown jarvis":
+            if self._loop:
+                asyncio.run_coroutine_threadsafe(self._lifecycle_action("shutdown"), self._loop)
+            else:
+                self._manager.shutdown()
+            return True
+        if low in ("what app is open", "what is open", "which app is open", "what am i using", "what window is open"):
+            self.ui.write_log("SYS: " + self._active_app_context().replace("\n", " | "))
+            return True
+
+        # Context-menu installation is a local Windows action. Handle it without
+        # waiting for Gemini to choose the tool, so this command always responds.
+        if low in (
+            "install ask jarvis context menu",
+            "install ask jarvis right click menu",
+            "add ask jarvis context menu",
+            "add ask jarvis to right click menu",
+        ):
+            try:
+                from actions.ask_jarvis_context import _install_windows_context_menu
+                result = _install_windows_context_menu()
+            except Exception as exc:
+                result = f"Could not install Ask JARVIS context menu: {exc}"
+            self.ui.write_log("SYS: " + str(result))
+            return True
+
+        # Emergency stop controls are always local and remain available
+        # even while the emergency latch is engaged so release can never depend
+        # on the cloud model.
+        if any(k in low for k in (
+            "emergency stop", "emergency kill switch", "kill switch",
+            "stop everything", "panic stop", "panic"
+        )):
+            self._run_local_action("emergency_kill_switch", {"action": "trigger"})
+            return True
+        if any(k in low for k in (
+            "release emergency stop", "clear emergency stop",
+            "unlock jarvis", "resume jarvis"
+        )):
+            self._run_local_action("emergency_kill_switch", {"action": "release", "_local": True})
+            return True
+
+        # HUD close controls stay local so they work even if Gemini is busy.
+        # A generic close phrase only closes the active temporary HUD; it can
+        # never shut down JARVIS or close an unrelated Windows application.
+        hud_close_phrases = {
+            "close", "close it", "close that", "close this",
+            "hide", "hide it", "hide that", "hide this",
+            "dismiss", "dismiss it", "dismiss that", "dismiss this",
+            "exit", "exit it", "exit that", "exit this",
+            "go back", "return", "return to jarvis", "back to jarvis",
+            "close hud", "close the hud", "hide hud", "hide the hud",
+            "close panel", "close viewer", "close result", "close results",
+            "dismiss panel", "dismiss viewer",
+        }
+        if self.ui.is_any_hud_open() and low in hud_close_phrases:
+            self.ui.close_active_hud()
+            self.ui.write_log("SYS: Active HUD closed.")
+            return True
+
+        if self.ui.is_weather_hud_open() and any(k in low for k in (
+            "close weather", "close weather hud", "close weather screen",
+            "hide weather", "exit weather", "dismiss weather",
+        )):
+            self.ui.stop_weather_view()
+            self.ui.write_log("SYS: Weather HUD closed.")
+            return True
+
+        if self.ui.is_camera_hud_open() and low in (
+            "close camera", "stop camera", "turn off camera",
+        ):
+            self.ui.stop_camera_stream()
+            self.ui.write_log("SYS: Camera HUD closed.")
+            return True
+
+        # Resource commands are local and always open the center result HUD.
+        if low in {
+            "show my resource usage",
+            "show resource usage",
+            "show system resources",
+        }:
+            result = self._run_local_action("resource_manager", {"action": "analyze"})
+            self.ui.show_content("RESOURCE • ANALYSIS", result)
+            # Local commands do not re-enter Gemini automatically. Give the
+            # user a concise spoken summary as well as the detailed HUD view.
+            try:
+                cpu_match = _re.search(r"CPU:\s*([\d.]+)%", result)
+                ram_match = _re.search(r"RAM:\s*[\d.]+\s*/\s*[\d.]+\s*GB\s*\(([\d.]+)%\)", result)
+                gpu_match = _re.search(r"GPU:\s*([\d.]+)%", result)
+                parts = []
+                if cpu_match:
+                    parts.append(f"CPU is {cpu_match.group(1)} percent")
+                if ram_match:
+                    parts.append(f"RAM is at {ram_match.group(1)} percent")
+                if gpu_match:
+                    parts.append(f"GPU is at {gpu_match.group(1)} percent")
+                spoken = "Sir, " + ", ".join(parts) + "." if parts else "Sir, your current resource usage is shown on the HUD."
+                self.speak(spoken)
+            except Exception:
+                self.speak("Sir, your current resource usage is shown on the HUD.")
+            return True
+
+        if low in {
+            "what is using the most ram",
+            "what is using most ram",
+            "which app is using the most ram",
+        }:
+            result = self._run_local_action("resource_manager", {"action": "top_memory", "limit": 10})
+            self.ui.show_content("RESOURCE • TOP RAM", result)
+            return True
+
+        if low in {
+            "what is using the most cpu",
+            "what is using most cpu",
+            "which app is using the most cpu",
+        }:
+            result = self._run_local_action("resource_manager", {"action": "top_cpu", "limit": 10})
+            self.ui.show_content("RESOURCE • TOP CPU", result)
+            return True
+
+        if low in {
+            "analyze my computer performance",
+            "analyze computer performance",
+            "analyze my pc performance",
+        }:
+            result = self._run_local_action("resource_manager", {"action": "analyze"})
+            self.ui.show_content("RESOURCE • PERFORMANCE", result)
+            return True
+
+        # Voice profile commands are local so profile lists and voice changes
+        # immediately appear in the same center HUD.
+        if low in {
+            "show my voice profiles",
+            "show voice profiles",
+            "list voice profiles",
+        }:
+            result = self._run_local_action("voice_profiles", {"action": "list"})
+            self.ui.show_content("VOICE • PROFILES", result)
+            return True
+
+        voice_match = _re.fullmatch(
+            r"(?:switch|change|set) (?:to )?(normal|calm|energetic|deep|bright)(?: voice)?",
+            low,
+        )
+        if voice_match:
+            profile = voice_match.group(1)
+            result = self._run_local_action("voice_profiles", {"action": "set", "profile": profile})
+            self.ui.show_content(f"VOICE • {profile.upper()}", result)
+            return True
+
+        # Notification commands are local and always surface their current state
+        # in the center HUD.
+        if low in {
+            "what notifications do i have",
+            "show my notifications",
+            "show notifications",
+        }:
+            result = self._run_local_action("notification_intelligence", {"action": "summary"})
+            self.ui.show_content("NOTIFICATIONS • SUMMARY", result)
+            return True
+
+        if low in {
+            "show important notifications",
+            "show important notification",
+        }:
+            result = self._run_local_action("notification_intelligence", {"action": "important"})
+            self.ui.show_content("NOTIFICATIONS • IMPORTANT", result)
+            return True
+
+        if low in {
+            "give me a notification digest",
+            "show notification digest",
+            "notification digest",
+        }:
+            result = self._run_local_action("notification_intelligence", {"action": "digest"})
+            self.ui.show_content("NOTIFICATIONS • DIGEST", result)
+            return True
+
+        quiet_match = _re.fullmatch(
+            r"enable notification quiet mode for (\d+) minutes?",
+            low,
+        )
+        if quiet_match:
+            minutes = max(1, min(int(quiet_match.group(1)), 1440))
+            result = self._run_local_action(
+                "notification_intelligence",
+                {"action": "quiet", "mode": "on", "minutes": minutes},
+            )
+            self.ui.show_content("NOTIFICATIONS • QUIET MODE", result)
+            return True
+
+        if low in {
+            "disable notification quiet mode",
+            "turn off notification quiet mode",
+        }:
+            result = self._run_local_action(
+                "notification_intelligence",
+                {"action": "quiet", "mode": "off"},
+            )
+            self.ui.show_content("NOTIFICATIONS • QUIET MODE", result)
+            return True
+
+        # Local AI controls are kept local so the HUD picker is immediate.
+        if low in {
+            "show local ai",
+            "show local ai model",
+            "show local ai models",
+            "show ollama",
+            "show ollama models",
+            "open local ai",
+            "local ai picker",
+        }:
+            # The picker is a UI capability, not a model-dependent action.
+            # Open it directly so it still works even when action discovery
+            # rejected local_ai_router because Ollama/core dependencies are
+            # unavailable.
+            try:
+                self.ui.show_local_ai_picker()
+                self.ui.write_log("SYS: Local AI picker opened.")
+                self.speak("Sir, the Local AI model picker is open on the HUD.")
+            except Exception as exc:
+                self.ui.write_log(f"ERR: Local AI HUD failed — {exc}")
+                self.speak("Sir, I couldn't open the Local AI picker.")
+            return True
+
+        if low in {
+            "enable local ai",
+            "turn on local ai",
+            "use local ai",
+        }:
+            self._run_local_action("local_ai_router", {"action": "enable"})
+            return True
+
+        if low in {
+            "disable local ai",
+            "turn off local ai",
+        }:
+            self._run_local_action("local_ai_router", {"action": "disable"})
+            return True
+
+        smart_match = _re.fullmatch(
+            r"(?:use|set) local ai(?: in)?\s+(fast|balanced|smart|vision)\s+mode",
+            low,
+        )
+        if smart_match:
+            mode = smart_match.group(1)
+            self._run_local_action("local_ai_router", {"action": "set_mode", "mode": mode})
+            self._run_local_action("local_ai_router", {"action": "enable"})
+            self.ui.write_log(f"SYS: Local AI mode set to {mode}.")
+            return True
+
+        # Crash Detective: detailed report goes to the HUD, concise status is spoken.
+        if low in {
+            "show crash detective",
+            "show crash report",
+            "show latest crash report",
+            "latest crash report",
+            "crash report",
+        }:
+            result = self._run_local_action("crash_detective", {"action": "latest"})
+            self.ui.show_content("CRASH DETECTIVE • LATEST", result)
+            try:
+                from core.crash_detective import latest_report
+                report = latest_report() or {}
+                exc_type = str(report.get("exception_type", "") or "")
+                exc = str(report.get("exception", "") or "")
+                if exc_type:
+                    self.speak(
+                        f"Sir, the latest crash report is on the HUD. "
+                        f"The error was {exc_type}: {exc[:180]}."
+                    )
+                else:
+                    self.speak("Sir, the Crash Detective report is on the HUD. There are no recorded crashes." if "No JARVIS crash reports" in result else "Sir, the Crash Detective report is on the HUD.")
+            except Exception:
+                self.speak("Sir, the Crash Detective report is on the HUD.")
+            return True
+
+        # Network Quality Monitor: the complete diagnostic is shown on the HUD.
+        if low in {
+            "start network monitor",
+            "start network monitoring",
+            "monitor my network",
+            "monitor the network",
+        }:
+            result = self._run_local_action(
+                "network_quality",
+                {"action": "start", "interval": 60},
+            )
+            self.ui.write_log("SYS: " + result)
+            self.speak("Sir, network quality monitoring is now running.")
+            return True
+
+        if low in {
+            "stop network monitor",
+            "stop network monitoring",
+            "stop monitoring my network",
+        }:
+            result = self._run_local_action("network_quality", {"action": "stop"})
+            self.ui.write_log("SYS: " + result)
+            self.speak("Sir, network quality monitoring has stopped.")
+            return True
+
+        if low in {
+            "show network quality",
+            "check network quality",
+            "check internet quality",
+            "network diagnostics",
+            "check network",
+            "show network diagnostics",
+        }:
+            result = self._run_local_action("network_quality", {"action": "snapshot"})
+            self.ui.show_content("NETWORK • QUALITY", result)
+            try:
+                quality = _re.search(r"Quality:\s*([A-Z]+)", result)
+                latency = _re.search(r"average\s+([\d.]+)\s*ms", result)
+                loss = _re.search(r"Packet loss:\s*([\d.]+)%", result)
+                spoken = "Sir, network quality is shown on the HUD."
+                if quality:
+                    spoken = f"Sir, network quality is {quality.group(1).lower()}."
+                    if latency:
+                        spoken += f" Average latency is {latency.group(1)} milliseconds."
+                    if loss:
+                        spoken += f" Packet loss is {loss.group(1)} percent."
+                self.speak(spoken)
+            except Exception:
+                self.speak("Sir, the network quality report is on the HUD.")
+            return True
+
+        # Visual UI recognition: let the user describe an element naturally.
+        find_match = _re.fullmatch(r"(?:find|locate|recognize)\s+(.+?)\s+(?:on|in)\s+(?:the\s+)?screen", low)
+        if find_match:
+            description = find_match.group(1).strip()
+            result = self._run_local_action(
+                "visual_ui",
+                {"action": "locate", "description": description},
+            )
+            self.ui.show_content("VISUAL UI • LOCATE", result)
+            if "coordinates (" in result.lower():
+                self.speak(f"Sir, I found {description}.")
+            else:
+                self.speak(f"Sir, I couldn't find {description} on the screen.")
+            return True
+
+        click_match = _re.fullmatch(r"click\s+(.+?)\s+(?:on|in)\s+(?:the\s+)?screen", low)
+        if click_match:
+            description = click_match.group(1).strip()
+            result = self._run_local_action(
+                "visual_ui",
+                {"action": "click", "description": description},
+            )
+            self.ui.show_content("VISUAL UI • CLICK", result)
+            self.speak(
+                f"Sir, I clicked {description}."
+                if "Clicked" in result
+                else f"Sir, I couldn't click {description}."
+            )
+            return True
+
+        # Camera commands must be handled before generic "open <app>" matching.
+        # Otherwise "open camera" can launch a Windows Camera.lnk instead of the
+        # persistent live camera inside the JARVIS HUD.
+        camera_open_phrases = (
+            "open camera",
+            "open the camera",
+            "start camera",
+            "start the camera",
+            "turn on camera",
+            "turn on the camera",
+            "show camera",
+            "show the camera",
+            "camera on",
+        )
+        if low in camera_open_phrases:
+            if self.ui.is_camera_hud_open():
+                self.ui.write_log("SYS: Camera HUD is already open.")
+            else:
+                self.ui.start_camera_stream()
+                self.ui.write_log("SYS: Camera HUD opened and will stay open until you say close camera.")
+            return True
+
+        if self.ui.is_content_open() and low in (
+            "close", "close it", "close that", "hide", "hide it", "hide that",
+            "dismiss", "dismiss it", "close panel", "close result", "close results",
+        ):
+            self.ui.stop_content()
+            self.ui.write_log("SYS: HUD result viewer closed.")
+            return True
+
+        # Windows app/window controls: keep common screen-management commands
+        # local so they are immediate and do not require a Gemini tool-call round trip.
+        app_match = _re.match(
+            r"^(?:fullscreen|full screen|maximize|maximise|"
+            r"minimize|minimise|restore|close|focus|open)\s+(.+)$",
+            raw,
+            _re.IGNORECASE,
+        )
+        if app_match:
+            verb = low.split(None, 1)[0]
+            app_name = app_match.group(1).strip()
+            if verb == "full" and low.startswith("full screen "):
+                verb = "fullscreen"
+            action = {
+                "fullscreen": "fullscreen",
+                "maximize": "maximize",
+                "maximise": "maximize",
+                "minimize": "minimize",
+                "minimise": "minimize",
+                "restore": "restore",
+                "close": "close",
+                "focus": "focus",
+            }.get(verb)
+            if action and app_name:
+                result = self._run_local_action(
+                    "app_screen_manager",
+                    {"action": action, "app": app_name},
+                )
+                self.ui.write_log("SYS: " + str(result))
+                return True
+
+        other_screen_match = _re.match(
+            r"^(?:move|send)\s+(.+?)\s+to\s+(?:another|the other)\s+(?:monitor|screen|display)$",
+            raw,
+            _re.IGNORECASE,
+        )
+        if other_screen_match:
+            app_name = other_screen_match.group(1).strip()
+            result = self._run_local_action(
+                "app_screen_manager",
+                {"action": "move_next_monitor", "app": app_name},
+            )
+            self.ui.write_log("SYS: " + str(result))
+            return True
+
+        move_match = _re.match(
+            r"^(?:move|send)\s+(.+?)\s+to\s+(?:monitor|screen|display)\s+(\d+)$",
+            raw,
+            _re.IGNORECASE,
+        )
+        if move_match:
+            app_name = move_match.group(1).strip()
+            monitor = int(move_match.group(2))
+            result = self._run_local_action(
+                "app_screen_manager",
+                {
+                    "action": "move_to_monitor",
+                    "app": app_name,
+                    "monitor": monitor,
+                },
+            )
+            self.ui.write_log("SYS: " + str(result))
+            return True
+
+        if low in (
+            "list open apps",
+            "list application windows",
+            "show open app windows",
+            "show open windows",
+            "what apps are open",
+        ):
+            result = self._run_local_action(
+                "app_screen_manager",
+                {"action": "list"},
+            )
+            self.ui.write_log("SYS: " + str(result))
+            return True
+
+        # Weather is a direct local API action — never route weather requests
+        # through browser search or generic web_search.
+        if (
+            low == "weather"
+            or low.startswith("weather ")
+            or "what's the weather" in low
+            or "what is the weather" in low
+            or low.startswith("weather in ")
+        ):
+            city = ""
+            m_weather = _re.search(r"\bweather\s+(?:in|at|for)\s+(.+)$", raw, _re.IGNORECASE)
+            if m_weather:
+                city = m_weather.group(1).strip()
+            report = (
+                "forecast"
+                if any(term in low for term in (
+                    "forecast", "tomorrow", "day after tomorrow",
+                    "next few days", "this week", "weekend"
+                ))
+                else "current"
+            )
+            self._run_local_action(
+                "weather_report",
+                {"city": city, "report": report, "days": 5, "_speak_result": True},
+            )
+            return True
+
+        # Local stopwatch controls: no Gemini round trip is needed for timing.
+        stopwatch_cmds = {
+            "start stopwatch": "start",
+            "begin stopwatch": "start",
+            "pause stopwatch": "pause",
+            "resume stopwatch": "resume",
+            "stop stopwatch": "stop",
+            "reset stopwatch": "reset",
+            "stopwatch status": "status",
+            "check stopwatch": "status",
+            "lap stopwatch": "lap",
+            "record lap": "lap",
+        }
+        if low in stopwatch_cmds:
+            self._run_local_action("stopwatch", {"action": stopwatch_cmds[low]})
+            return True
+
+        # Local Wi-Fi and Bluetooth controls. These are intentionally explicit
+        # so "turn Wi-Fi off" does not depend on the cloud model being alive.
+        if "wi-fi" in low or "wifi" in low:
+            if any(x in low for x in ("turn on", "switch on", "enable", "start")):
+                self._run_local_action("windows_settings", {"action": "wifi", "mode": "on"})
+                return True
+            if any(x in low for x in ("turn off", "switch off", "disable", "stop")):
+                self._run_local_action("windows_settings", {"action": "wifi", "mode": "off"})
+                return True
+            if any(x in low for x in ("status", "is wifi", "is wi-fi")):
+                self._run_local_action("windows_settings", {"action": "wifi", "mode": "status"})
+                return True
+
+        if "bluetooth" in low or "blue tooth" in low:
+            if any(x in low for x in ("turn on", "switch on", "enable", "start")):
+                self._run_local_action("windows_settings", {"action": "bluetooth", "mode": "on"})
+                return True
+            if any(x in low for x in ("turn off", "switch off", "disable", "stop")):
+                self._run_local_action("windows_settings", {"action": "bluetooth", "mode": "off"})
+                return True
+            if any(x in low for x in ("status", "is bluetooth", "is blue tooth")):
+                self._run_local_action("windows_settings", {"action": "bluetooth", "mode": "status"})
+                return True
+
+        if low in ("open windows settings", "open windows settings app", "windows settings"):
+            self._run_local_action("windows_settings", {"action": "open", "page": "system"})
+            return True
+
+        if low in ("mute", "mute jarvis") or low.endswith("mute my computer"):
+            try:
+                self._run_local_action("computer_settings", {"action": "mute"})
+                return True
+            except Exception:
+                return False
+        m = _re.match(r"^(?:open|launch|start)\s+(.+)$", raw, _re.IGNORECASE)
+        if m and not any(x in low for x in ("website", "url", "http")):
+            app_name = m.group(1).strip()
+            if app_name:
+                # Try the idle-built personal file index first. This makes
+                # "open my project file" fast without another model round trip.
+                try:
+                    from actions.file_indexer import file_indexer
+                    indexed = str(file_indexer({"action": "open", "query": app_name}))
+                    if indexed.startswith("Opened "):
+                        self.ui.write_log("SYS: " + indexed)
+                        return True
+                except Exception:
+                    pass
+                self._run_local_action("open_app", {"app_name": app_name})
+                return True
+        return False
+
+    def _run_local_action(self, name: str, args: dict) -> str:
+        try:
+            if emergency_stop.is_active() and name != "emergency_kill_switch":
+                result = "Emergency stop is active. The requested local action was not performed."
+                self.ui.write_log("SYS: " + result)
+                return result
+
+            if self._action_registry.has(name):
+                result = self._action_registry.run(
+                    name,
+                    args,
+                    {
+                        "player": self.ui,
+                        "speak": self.speak,
+                        "response": None,
+                        "session_memory": None,
+                    },
+                )
+            elif name == "computer_settings":
+                result = "Local settings action unavailable."
+            else:
+                result = "Local action unavailable."
+
+            self.ui.write_log(f"SYS: {result}")
+            result_text = str(result)
+
+            if name == "weather_report" and args.get("_speak_result"):
+                # Local weather bypasses Gemini's normal user-turn path, so
+                # explicitly send the completed result into the active Live
+                # session for spoken delivery.
+                self.speak(result_text)
+
+            return result_text
+        except Exception as e:
+            self.ui.write_log(f"ERR: Local command failed — {e}")
+            return str(e)
+
+    def _on_emergency_state(self, reason: str) -> None:
+        """React immediately when the emergency latch is engaged or released."""
+        active = emergency_stop.is_active()
+        try:
+            self.ui.set_emergency_active(active)
+        except Exception:
+            pass
+        if active:
+            try:
+                confirm_gate.resolve(False)
+            except Exception:
+                pass
+            self.interrupt()
+            try:
+                self.ui.stop_camera_stream()
+            except Exception:
+                pass
+            try:
+                self.ui.stop_weather_view()
+            except Exception:
+                pass
+            self._awake = False
+            self._manual_sleep = True
+            self._ptt_held = False
+            if self._ptt is not None:
+                try:
+                    self._ptt.stop()
+                except Exception:
+                    pass
+            self.ui.set_state("SLEEPING")
+            self.ui.write_log("SYS: EMERGENCY STOP engaged — JARVIS-controlled activity blocked.")
+        else:
+            self._manual_sleep = False
+            self._awake = not self._wake_enabled
+            if self._wake_enabled:
+                try:
+                    self._ensure_wake_detector()
+                except Exception:
+                    pass
+            try:
+                self.ui.set_emergency_active(False)
+            except Exception:
+                pass
+            if self._awake and not self.ui.muted:
+                self.ui.set_state("LISTENING")
+            else:
+                self.ui.set_state("SLEEPING")
+            self.ui.write_log("SYS: Emergency stop released.")
+
+    def emergency_kill(self, engage: bool = True, reason: str = "HUD emergency control") -> None:
+        """Engage or release the fail-closed JARVIS activity latch."""
+        if engage:
+            emergency_stop.trigger(reason)
+        else:
+            emergency_stop.release(reason)
+
+    async def _lifecycle_action(self, action: str) -> None:
+        """Perform a JARVIS process lifecycle action without involving Gemini."""
+        self.ui.write_log(f"SYS: {action.title()} requested.")
+
+        # Save the current session only when one exists. Do not send another
+        # user turn through Gemini here because that can cause the model to
+        # call restart_jarvis/shutdown_jarvis again and create a lifecycle loop.
+        if self.session:
+            await self._save_session_summary()
+
+        if action == "restart":
+            self.ui.write_log("SYS: Restarting JARVIS.")
+            await asyncio.sleep(0.8)
+            if not self._manager.restart():
+                self.ui.write_log("ERR: JARVIS restart failed.")
+        elif action == "shutdown":
+            self.ui.write_log("SYS: Shutting down JARVIS.")
+            await asyncio.sleep(0.8)
+            self._manager.shutdown()
 
     def _tail_active(self) -> bool:
         """True while the speakers may still be finishing our last sentence."""
@@ -903,7 +2003,7 @@ class JarvisLive:
         if held:
             # Holding the key is also a way to wake it, so push-to-talk works
             # without having to say the wake word first.
-            if self._wake_enabled and not self._awake:
+            if (self._wake_enabled or self._manual_sleep) and not self._awake:
                 self._awake = True
                 self._last_user_speech = time.monotonic()
         try:
@@ -934,6 +2034,8 @@ class JarvisLive:
         self.ui.write_log("SYS: Interrupted — listening...")
 
     def speak(self, text: str):
+        if emergency_stop.is_active():
+            return
         if not self._loop or not self.session:
             return
         asyncio.run_coroutine_threadsafe(
@@ -1000,6 +2102,18 @@ class JarvisLive:
         _all_decls = (TOOL_DECLARATIONS
                       + self._action_registry.get_tool_declarations()
                       + self._plugin_registry.get_tool_declarations())
+
+        # Gemini 3.8 Live defaults function calls to asynchronous NON_BLOCKING
+        # execution. JARVIS currently has a synchronous tool-response loop, so
+        # explicitly mark every declaration as BLOCKING until the execution
+        # pipeline is migrated to the new async scheduling protocol.
+        _normalized_decls = []
+        for _decl in _all_decls:
+            if isinstance(_decl, dict):
+                _decl = dict(_decl)
+                _decl.setdefault("behavior", "BLOCKING")
+            _normalized_decls.append(_decl)
+        _all_decls = _normalized_decls
         _names = {(d.get("name") if isinstance(d, dict) else getattr(d, "name", ""))
                   for d in _all_decls}
         sys_prompt = _render_prompt(sys_prompt, {
@@ -1010,6 +2124,8 @@ class JarvisLive:
                 has_vision="screen_process" in _names,
                 has_mic=True,
             ),
+            "active_app": self._active_app_context(),
+            "routines": format_routines_for_prompt(load_memory()),
         })
 
         parts = [time_ctx, identity_ctx]
@@ -1037,7 +2153,7 @@ class JarvisLive:
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=get_voice()
+                        voice_name=active_voice()
                     )
                 )
             ),
@@ -1099,15 +2215,8 @@ class JarvisLive:
                 "high":   types.MediaResolution.MEDIA_RESOLUTION_HIGH,
             }[res]
 
-        # Thinking is left at the server default deliberately. Forcing the budget
-        # to zero was measured on gemini-3.1-flash-live over interleaved trials
-        # and did not make the first word arrive sooner — this model does not
-        # appear to deliberate on the Live path, so pinning the field only adds a
-        # way for a future release to behave differently. Set "thinking_enabled"
-        # in config/api_keys.json to true to let it reason instead.
-        if get_thinking_enabled():
-            out["thinking_config"] = types.ThinkingConfig(thinking_budget=-1)
-
+        # Gemini 3.8 Live does not accept thinking_config. It uses its own
+        # fixed low-latency interleaved reasoning profile.
         return out
 
     async def _execute_tool(self, fc) -> types.FunctionResponse:
@@ -1115,15 +2224,54 @@ class JarvisLive:
         args = dict(fc.args or {})
 
         print(f"[JARVIS] 🔧 {name}  {args}")
+
+        if emergency_stop.is_active() and name != "emergency_kill_switch":
+            self.ui.write_log(f"SYS: Emergency stop blocked tool '{name}'.")
+            return types.FunctionResponse(
+                id=fc.id,
+                name=name,
+                response={"result": "Emergency stop is active. Action not performed.", "blocked": True},
+            )
+
+        # Lifecycle tools require an explicit user phrase ending in "jarvis".
+        # This is a hard guard against an LLM interpreting "close" as shutdown.
+        if name in {"shutdown_jarvis", "restart_jarvis", "sleep_jarvis"}:
+            command = str(getattr(self, "_current_turn_text", "") or "").casefold().strip()
+            lifecycle_ok = (
+                command in {"shutdown jarvis", "restart jarvis", "sleep jarvis"}
+            )
+            if not lifecycle_ok:
+                result = "Lifecycle action blocked: say 'shutdown jarvis', 'restart jarvis', or 'sleep jarvis' explicitly."
+                self.ui.write_log("SYS: " + result)
+                return types.FunctionResponse(
+                    id=fc.id,
+                    name=name,
+                    response={"result": result, "blocked": True},
+                )
+
         self.ui.set_state("THINKING")
 
+        # When workflow recording is active, capture the exact tool call so the
+        # user can replay the workflow later. The recorder ignores its own calls.
+        try:
+            record_tool_call(name, args)
+        except Exception:
+            pass
 
         if name == "save_memory":
             category = args.get("category", "notes")
             key      = args.get("key", "")
             value    = args.get("value", "")
             if key and value:
-                update_memory({category: {key: {"value": value}}})
+                try:
+                    importance = max(1, min(5, int(args.get("importance", 1))))
+                except (TypeError, ValueError):
+                    importance = 1
+                update_memory({category: {key: {
+                    "value": value,
+                    "importance": importance,
+                    "pinned": bool(args.get("pinned", False)),
+                }}})
                 print(f"[Memory] 💾 save_memory: {category}/{key} = {value}")
             if not self.ui.muted:
                 self.ui.set_state("LISTENING")
@@ -1150,7 +2298,11 @@ class JarvisLive:
                               + "\n".join(f"{i+1}. {t}" for i, t in enumerate(items))
                               ) if items else "I have not changed anything I can undo yet."
                 else:
-                    result = await loop.run_in_executor(None, undo_stack.undo_last)
+                    count = max(1, min(10, int(args.get("count", 1) or 1)))
+                    if count > 1:
+                        result = await loop.run_in_executor(None, undo_stack.undo_steps, count)
+                    else:
+                        result = await loop.run_in_executor(None, undo_stack.undo_last)
 
             elif name == "screen_process":
                 import time as _t_mod
@@ -1165,17 +2317,33 @@ class JarvisLive:
                     self._vision_last_time = _now
                     angle     = args.get("angle", "screen").lower()
                     user_text = args.get("text", "What do you see?")
+                    monitor   = args.get("monitor", 1)
+                    zoom      = args.get("zoom", 1.0)
+                    region = None
+                    if any(k in args for k in ("x", "y", "width", "height")):
+                        region = {
+                            "x": args.get("x", 0),
+                            "y": args.get("y", 0),
+                            "width": args.get("width", 1),
+                            "height": args.get("height", 1),
+                        }
                     if angle == "camera":
                         img_b, mime_t = await loop.run_in_executor(None, _capture_camera)
                         self.ui.start_camera_stream()
-                        self._vision_cam_active = True
                         print(f"[Vision] 📷 Camera: {len(img_b):,} bytes")
                         _stall = "camera"
+                        vision_meta = "webcam"
                     else:
-                        img_b, mime_t = await loop.run_in_executor(None, _capture_screen)
-                        print(f"[Vision] 🖥️  Screen: {len(img_b):,} bytes")
+                        img_b, mime_t = await loop.run_in_executor(
+                            None, lambda: _capture_screen(monitor=monitor, region=region, zoom=zoom)
+                        )
+                        print(f"[Vision] 🖥️  Screen monitor {monitor}: {len(img_b):,} bytes")
                         _stall = "screen"
-                    self._pending_vision = (img_b, mime_t, user_text, angle)
+                        vision_meta = f"screen monitor {monitor}" + (
+                            f", region {region['x']},{region['y']} {region['width']}x{region['height']}"
+                            if region else ""
+                        )
+                    self._pending_vision = (img_b, mime_t, user_text, angle, vision_meta)
                     # The image is attached to this same exchange, so there is
                     # nothing to stall for and nothing to announce. Asking for an
                     # acknowledgement here is what produced two spoken answers —
@@ -1188,9 +2356,117 @@ class JarvisLive:
                         f"in it."
                     )
 
+            elif name == "screen_ocr":
+                angle = str(args.get("angle", "screen") or "screen").lower()
+                if angle not in ("screen", "camera"):
+                    angle = "screen"
+                monitor = args.get("monitor", 1)
+                ocr_question = (
+                    "OCR MODE. Extract all readable text from this image exactly as displayed. "
+                    "Preserve meaningful line breaks and punctuation. Return only the extracted text. "
+                    "If no readable text is present, return NO_READABLE_TEXT."
+                )
+                if angle == "camera":
+                    img_b, mime_t = await loop.run_in_executor(None, _capture_camera)
+                    self.ui.start_camera_stream()
+                    vision_meta = "webcam OCR"
+                else:
+                    img_b, mime_t = await loop.run_in_executor(
+                        None, lambda: _capture_screen(monitor=monitor)
+                    )
+                    vision_meta = f"screen monitor {monitor} OCR"
+                self._vision_busy = True
+                self._vision_last_time = time.monotonic()
+                self._pending_vision = (img_b, mime_t, ocr_question, angle, vision_meta)
+                result = "[VISION_ACTIVE] OCR image attached. Extract the text and return only the OCR result."
+
+            elif name == "scan_visual_code":
+                angle = str(args.get("angle", "screen") or "screen").lower()
+                monitor = args.get("monitor", 1)
+                if angle == "camera":
+                    img_b, mime_t = await loop.run_in_executor(None, _capture_camera)
+                    self.ui.show_camera_frame(img_b)
+                    source = "camera"
+                else:
+                    img_b, mime_t = await loop.run_in_executor(
+                        None, lambda: _capture_screen(monitor=monitor)
+                    )
+                    source = f"screen monitor {monitor}"
+                codes = await loop.run_in_executor(None, lambda: scan_visual_codes(img_b))
+                if codes:
+                    result = f"Codes found in {source}:\n" + "\n".join(
+                        f"- {item.get('type', 'CODE')}: {item.get('data', '')}" for item in codes
+                    )
+                    self.ui.show_content("SCANNED CODES", result)
+                else:
+                    result = f"No QR code or supported barcode detected in {source}."
+
+            elif name == "network_diagnostics":
+                host = str(args.get("host", "1.1.1.1") or "1.1.1.1")
+                result = await loop.run_in_executor(None, lambda: get_network_diagnostics(host))
+
+            elif name == "active_app":
+                result = self._active_app_context()
+
+            elif name == "forget_memory":
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: forget_memory(
+                        query=str(args.get("query", "")),
+                        category=str(args.get("category", "")),
+                        key=str(args.get("key", "")),
+                    )
+                )
+
+            elif name == "manage_routine":
+                action = str(args.get("action", "list") or "list").lower().strip()
+                routine_name = str(args.get("name", "") or "").strip()
+                if action == "create":
+                    result = save_routine(
+                        routine_name,
+                        args.get("steps", ""),
+                        str(args.get("description", "") or ""),
+                    )
+                elif action == "delete":
+                    result = delete_routine(routine_name)
+                elif action == "list":
+                    result = list_routines()
+                elif action == "get":
+                    routine = get_routine(routine_name)
+                    if not routine:
+                        result = f"Routine not found: {routine_name}"
+                    else:
+                        result = "Routine: " + str(routine.get("name", routine_name)) + "\nSteps:\n" + "\n".join(
+                            f"{i + 1}. {s}" for i, s in enumerate(routine.get("steps", []))
+                        )
+                elif action == "run":
+                    routine = get_routine(routine_name)
+                    if not routine:
+                        result = f"Routine not found: {routine_name}"
+                    else:
+                        result = (
+                            f"[ROUTINE_RUN] Execute this routine in order without skipping steps: "
+                            f"{routine.get('name', routine_name)}\n" +
+                            "\n".join(f"{i + 1}. {s}" for i, s in enumerate(routine.get("steps", [])))
+                        )
+                else:
+                    result = "Routine action must be create, delete, list, get, or run."
+
+            elif name == "sleep_jarvis":
+                self.sleep(reason="user requested sleep", manual=True)
+                result = "JARVIS is sleeping. Say 'wake up Jarvis' or 'Hey Jarvis' to wake me."
+
+            elif name == "restart_jarvis":
+                asyncio.create_task(self._lifecycle_action("restart"))
+                result = "JARVIS is restarting."
+
             elif name == "close_camera":
                 self.ui.stop_camera_stream()
                 result = "Camera closed."
+
+            elif name == "close_weather":
+                self.ui.stop_weather_view()
+                result = "Weather HUD closed."
 
             elif name == "system_status":
                 r = await loop.run_in_executor(None, get_system_status)
@@ -1210,22 +2486,7 @@ class JarvisLive:
                     result = "Specify action (add/remove/list) and a topic."
 
             elif name == "shutdown_jarvis":
-                self.ui.write_log("SYS: Shutdown requested.")
-                async def _do_shutdown():
-                    await self._save_session_summary()
-                    if self.session:
-                        try:
-                            await self.session.send_client_content(
-                                turns={"role": "user", "parts": [{"text": "Say a brief natural goodbye to the user."}]},
-                                turn_complete=True,
-                            )
-                        except Exception:
-                            pass
-                    await asyncio.sleep(1.5)
-                    import os as _os
-                    _os._exit(0)
-                asyncio.create_task(_do_shutdown())
-
+                asyncio.create_task(self._lifecycle_action("shutdown"))
             elif self._action_registry.has(name):
                 # file_processor: fall back to the currently-uploaded file when none is given
                 if name == "file_processor" and not args.get("file_path") and self.ui.current_file:
@@ -1234,6 +2495,9 @@ class JarvisLive:
                         "response": None, "session_memory": None}
                 r = await loop.run_in_executor(None, lambda: self._action_registry.run(name, args, _ctx))
                 result = r or "Done."
+
+                if name == "file_controller" and bool(args.get("preview", False)):
+                    self.ui.show_content("FILE OPERATION PREVIEW", str(result))
                 # web_search: mirror results to the on-screen content panel
                 if (name == "web_search" and r
                         and not r.startswith("No results")
@@ -1258,6 +2522,27 @@ class JarvisLive:
             traceback.print_exc()
             self.speak_error(name, e)
 
+        # Render important tool results from the common exit path. This covers
+        # actions, plugins, and any future dispatcher path without relying on a
+        # particular branch above.
+        try:
+            _hud = _hud_result_payload(name, args, str(result))
+            if _hud is not None:
+                _hud_title, _hud_body, _auto_copy = _hud
+                self.ui.show_content(_hud_title, _hud_body)
+                if _auto_copy:
+                    try:
+                        import pyperclip
+                        _code_only = _hud_body.split("===== CODE =====", 1)[-1]
+                        _code_only = _code_only.split("===== JARVIS RESULT =====", 1)[0].strip()
+                        if _code_only:
+                            pyperclip.copy(_code_only)
+                            self.ui.write_log("SYS: Code copied to clipboard.")
+                    except Exception as _copy_exc:
+                        self.ui.write_log(f"SYS: Could not copy code to clipboard: {_copy_exc}")
+        except Exception as _hud_exc:
+            self.ui.write_log(f"SYS: HUD result display skipped: {_hud_exc}")
+
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
 
@@ -1281,15 +2566,10 @@ class JarvisLive:
     async def _send_realtime(self):
         while True:
             msg = await self.out_queue.get()
-            # Gemini 3.x Live rejects the old realtime_input.media_chunks field
-            # (what `media=...` maps to) and closes the socket with a 1007. Send
-            # mic / phone PCM through the new `audio` field instead. Queue items
-            # are {"data": <bytes>, "mime_type": <str>} from _listen_audio and
-            # the phone relay.
             await self.session.send_realtime_input(
                 audio=types.Blob(
                     data=msg["data"],
-                    mime_type=msg.get("mime_type", "audio/pcm"),
+                    mime_type=msg.get("mime_type", "audio/pcm;rate=16000"),
                 )
             )
 
@@ -1305,7 +2585,7 @@ class JarvisLive:
             # detector, which runs its model in ITS OWN thread — the cost here is
             # only a queue push, so the audio path is never slowed. When wake word
             # is off (default) or we're awake, this is a single boolean check.
-            if self._wake_enabled and not self._awake:
+            if (self._wake_enabled or self._manual_sleep) and not self._awake:
                 det = self._wake_detector
                 if det is not None:
                     det.feed(indata)
@@ -1359,10 +2639,26 @@ class JarvisLive:
 
             if not self.ui.muted and not self._phone_active:
                 data = indata.tobytes()
+                now = time.monotonic()
+                level = _pcm_level(indata)
+
+                try:
+                    _LOCAL_AUDIO_OBSERVER(indata)
+                except Exception:
+                    pass
+
+                # Stream microphone PCM continuously. Gemini 3.8 Live's
+                # automatic server VAD handles speech boundaries. A short
+                # server silence window below keeps turn finalization fast.
+                if level >= 0.08 and self._client_turn_started == 0.0:
+                    self._client_turn_started = now
+                    self._client_first_audio_logged = False
+
                 loop.call_soon_threadsafe(
                     self.out_queue.put_nowait,
-                    {"data": data, "mime_type": "audio/pcm"}
+                    {"data": data, "mime_type": "audio/pcm;rate=16000"}
                 )
+
                 # Feed the live mic level to the HUD so the waveform reacts to
                 # the user's actual voice while listening. Purely cosmetic — any
                 # failure here must never disturb the mic.
@@ -1428,7 +2724,7 @@ class JarvisLive:
             return False
 
         import base64 as _b64
-        img_b, mime_t, question, angle = self._pending_vision
+        img_b, mime_t, question, angle, vision_meta = self._pending_vision
         self._pending_vision = None
         b64 = _b64.b64encode(img_b).decode("ascii")
         print(f"[Vision] 📤 {len(img_b):,} bytes (angle={angle}) → main session")
@@ -1439,21 +2735,20 @@ class JarvisLive:
         # label *means* is explained once, in the generated [SELF] block.
         src = ("[IMAGE SOURCE: WEBCAM]" if angle == "camera"
                else "[IMAGE SOURCE: SCREEN CAPTURE]")
+        meta = str(vision_meta or "").strip()
+        source_text = src + (f"\n[{meta}]" if meta else "")
         await self.session.send_client_content(
             turns={"role": "user", "parts": [
                 {"inline_data": {"mime_type": mime_t, "data": b64}},
-                {"text": f"{src}\n\n{question}"},
+                {"text": f"{source_text}\n\n{question}"},
             ]},
             turn_complete=True,
         )
 
-        if self._vision_cam_active:
-            # Camera: stay busy until JARVIS has finished speaking the answer,
-            # then close the preview.
-            self._vision_cam_active    = False
-            self._vision_close_pending = True
-        else:
-            self._vision_busy = False
+        # The camera HUD is persistent by design. A vision answer completes
+        # without closing the live camera view. The view is closed only through
+        # close_camera, the HUD close button, or a matching spoken close command.
+        self._vision_busy = False
         return True
 
     async def _receive_audio(self):
@@ -1478,6 +2773,13 @@ class JarvisLive:
                             self._resume_handle = _sru.new_handle
 
                     if response.data:
+                        if (
+                            not self._client_first_audio_logged
+                            and self._client_turn_started > 0.0
+                        ):
+                            _lat = time.monotonic() - self._client_turn_started
+                            print(f"[LATENCY] First model audio: {_lat:.2f}s")
+                            self._client_first_audio_logged = True
                         if self._interrupted:
                             pass  # discard: interrupted
                         else:
@@ -1513,9 +2815,11 @@ class JarvisLive:
                         if sc.input_transcription and sc.input_transcription.text:
                             txt = _clean_transcript(sc.input_transcription.text)
                             if txt:
+                                if not in_buf:
+                                    self._no_progress.reset()
                                 in_buf.append(txt)
+                                self._current_turn_text = " ".join(in_buf).strip()
                                 self._last_user_speech = time.monotonic()
-
                         if sc.turn_complete:
                             if self._turn_done_event:
                                 self._turn_done_event.set()
@@ -1540,7 +2844,9 @@ class JarvisLive:
                                         "text": full_in,
                                         "ts": datetime.now().isoformat(),
                                     }))
+                            self._current_turn_text = full_in
                             in_buf = []
+                            self._client_turn_started = 0.0
 
                             full_out = " ".join(out_buf).strip()
                             # Second line of defence: even if a repeat slips
@@ -1561,20 +2867,41 @@ class JarvisLive:
                                     }))
                             out_buf = []
 
-                            if self._vision_close_pending:
-                                # This turn_complete IS the vision answer — close camera + release busy flag
-                                self._vision_close_pending = False
-                                self._vision_busy = False
-                                async def _cam_close():
-                                    await asyncio.sleep(2.0)
-                                    self.ui.stop_camera_stream()
-                                asyncio.create_task(_cam_close())
+                            # Vision is complete. Leave a live camera view open
+                            # until the user explicitly asks JARVIS to close it.
+                            self._vision_busy = False
 
                     if response.tool_call:
                         fn_responses = []
                         for fc in response.tool_call.function_calls:
                             print(f"[JARVIS] 📞 {fc.name}")
-                            fr = await self._execute_tool(fc)
+                            _tool_args = dict(fc.args or {})
+                            _started = time.perf_counter()
+                            trace_tool_start(fc.name, _tool_args)
+                            allowed, repeat_count = self._no_progress.check(fc.name, _tool_args)
+                            if not allowed:
+                                _msg = (
+                                    f"JARVIS stopped a repeated no-progress tool call: "
+                                    f"{fc.name} was requested {repeat_count} times with identical arguments."
+                                )
+                                self.ui.write_log("SYS: " + _msg)
+                                fr = types.FunctionResponse(
+                                    id=fc.id, name=fc.name,
+                                    response={"result": _msg, "blocked": True, "no_progress": True},
+                                )
+                            else:
+                                fr = await self._execute_tool(fc)
+                            _elapsed = time.perf_counter() - _started
+                            try:
+                                _result = getattr(fr, "response", None)
+                            except Exception:
+                                _result = None
+                            trace_tool_end(
+                                fc.name,
+                                _result,
+                                error=None,
+                                duration=_elapsed,
+                            )
                             fn_responses.append(fr)
                         await self.session.send_tool_response(
                             function_responses=fn_responses
@@ -1723,15 +3050,12 @@ class JarvisLive:
     # ── Morning briefing ────────────────────────────────────────────────────────
 
     async def _send_startup_briefing(self) -> None:
+        """Send only the startup greeting.
+
+        News is intentionally not fetched or spoken during startup. This keeps
+        the first user interaction completely independent of background news work.
         """
-        Two-phase briefing optimized for speed:
-          Phase 1 — instant greeting (no tools) → speech starts in <1s
-          Phase 2 — news pre-fetched in a background thread while Phase 1 plays,
-                    delivered as ready text (no Gemini tool-call round-trip) and
-                    shown on the UI content panel. Waits for turn_complete event
-                    instead of a fixed sleep so there is no unnecessary gap.
-        """
-        memory   = load_memory()
+        memory = load_memory()
         identity = memory.get("identity", {})
 
         def _val(k: str) -> str:
@@ -1742,119 +3066,42 @@ class JarvisLive:
         name = _val("name")
         time_str = datetime.now().strftime("%H:%M")
 
-        # Start fetching news immediately — runs in parallel while phase 1 plays
-        loop = asyncio.get_event_loop()
-        news_future = loop.run_in_executor(None, _fetch_news_sync, "top world news today")
-
-        await asyncio.sleep(0.3)
-        if not self.session:
-            return
-
-        # ── Phase 1: instant greeting ─────────────────────────────────────────
-        # The briefing fires before the user has said anything, so the
-        # remembered language is the only signal there is. It is a starting
-        # point, not a setting: the moment they reply, their language wins.
-        lang_clause = (f" Speak this greeting in {lang}, then follow the "
-                       f"user's own language from their first reply onward."
-                       if lang else "")
+        lang_clause = (
+            f" Speak this greeting in {lang}, then follow the user's own language "
+            "from their first reply onward."
+            if lang else ""
+        )
         name_clause = f" Address the user as {name}." if name else ""
 
-        # Inject last session context if available — pop removes it so it's never repeated
         last = await asyncio.to_thread(pop_last_session)
         session_clause = ""
         if last:
             try:
                 _delta = (datetime.now() - datetime.strptime(last["date"], "%Y-%m-%d")).days
-                _when  = "earlier today" if _delta == 0 else ("yesterday" if _delta == 1 else f"{_delta} days ago")
+                _when = (
+                    "earlier today" if _delta == 0
+                    else ("yesterday" if _delta == 1 else f"{_delta} days ago")
+                )
             except Exception:
                 _when = "last time"
-            session_clause = (
-                f" Also briefly and naturally mention that {_when}: {last['summary']}"
+            session_clause = f" Also briefly mention that {_when}: {last['summary']}"
+
+        if not self.session:
+            return
+
+        prompt = (
+            f"Greet the user warmly and mention it is {time_str}.{session_clause} "
+            f"Keep it to 2 short sentences maximum. Do not mention news and do not "
+            f"call tools.{lang_clause}{name_clause}"
+        )
+        try:
+            await self.session.send_client_content(
+                turns={"role": "user", "parts": [{"text": prompt}]},
+                turn_complete=True,
             )
-
-        p1 = (
-            f"Greet the user warmly, mention it is {time_str}, and say you are fetching today's news now.{session_clause} "
-            f"Keep it to 2 short sentences max. Do not call any tools.{lang_clause}{name_clause}"
-        )
-
-        # Clear the turn-done event so we can wait for Phase 1 to finish
-        if self._turn_done_event:
-            self._turn_done_event.clear()
-
-        await self.session.send_client_content(
-            turns={"role": "user", "parts": [{"text": p1}]},
-            turn_complete=True,
-        )
-        print("[JARVIS] Briefing phase 1 (greeting) sent.")
-
-        # ── Phase 2: fire as soon as Phase 1 audio is done ───────────────────
-        async def _deliver_news():
-            try:
-                lang_str = (f" Speak in {lang} unless the user has since "
-                            f"spoken another language, in which case use theirs."
-                            if lang else "")
-
-                # Wait for news fetch (already running) and Phase 1 turn-complete
-                # in parallel — whichever takes longer determines the wait time
-                news_done   = asyncio.wrap_future(news_future)
-                turn_waited = False
-                if self._turn_done_event:
-                    try:
-                        await asyncio.wait_for(self._turn_done_event.wait(), timeout=6.0)
-                        turn_waited = True
-                    except asyncio.TimeoutError:
-                        pass
-
-                # Extra buffer: turn_complete fires when Gemini finishes *generating*
-                # Phase 1, but audio may still be playing.  Waiting a beat here
-                # prevents Phase 2 audio from arriving while Phase 1 is mid-sentence
-                # (which sounds like a "repeated first response" to the user).
-                if turn_waited:
-                    await asyncio.sleep(0.8)
-                else:
-                    await asyncio.sleep(1.0)
-
-                try:
-                    news_text = await asyncio.wait_for(news_done, timeout=8.0)
-                except Exception as e:
-                    self.ui.write_log(f"SYS: News fetch timed out/failed: {e!r}")
-                    news_text = ""
-
-                if not self.session:
-                    return
-
-                failed = (not news_text) or news_text.startswith(
-                    ("No news found", "Search failed", "Please provide")
-                )
-                if not failed:
-                    # Show on UI content panel immediately
-                    self.ui.show_content("NEWS — top world news today", news_text)
-
-                    p2 = (
-                        f"[BRIEFING] Here are today's top news headlines:\n{news_text}\n\n"
-                        "Pick ONE headline, summarise it in one sentence, then say the full list "
-                        f"is displayed on screen. Do not call any tools.{lang_str}"
-                    )
-                else:
-                    self.ui.write_log(
-                        f"SYS: News unavailable — backend returned: {news_text[:120]!r}"
-                    )
-                    p2 = (
-                        "News headlines could not be fetched right now. "
-                        f"Let the user know briefly.{lang_str}"
-                    )
-
-                await self.session.send_client_content(
-                    turns={"role": "user", "parts": [{"text": p2}]},
-                    turn_complete=True,
-                )
-                print("[JARVIS] Briefing phase 2 (news) sent.")
-            except Exception as e:
-                print(f"[Briefing] Phase 2 error: {e}")
-                print(f"[JARVIS] Briefing phase 2 failed: {e}")
-                self.ui.write_log("SYS: Could not fetch the news for the briefing.")
-
-        asyncio.create_task(_deliver_news())
+            print("[JARVIS] Briefing greeting sent.")
+        except Exception as exc:
+            print(f"[Briefing] Greeting failed: {exc}")
 
     # ── Session memory ──────────────────────────────────────────────────────────
 
@@ -1863,7 +3110,9 @@ class JarvisLive:
         log = self._session_log
         if len(log) < 3:          # need at least one exchange to be worth saving
             return
-        self._session_log = []    # reset immediately so the next session starts clean
+        self._session_log = []
+        # Raw user text for the currently active Gemini turn. Used to guard
+        # lifecycle tools so generic words like "close" can never shut down JARVIS.
 
         memory = load_memory()
         lang_entry = memory.get("identity", {}).get("language", {})
@@ -1895,7 +3144,13 @@ class JarvisLive:
             alert = await asyncio.to_thread(self._sys_monitor.check)
             if not alert or not self.session or not self._awake:
                 continue
-            # Don't interrupt an active conversation
+            if focus_mode_active():
+                continue
+            # Don't interrupt an active conversation. Every alert is also stored
+            # in the intelligent inbox, where repeated events are deduplicated.
+            add_notification("System monitor", alert, "system_monitor")
+            if not should_interrupt("System monitor", alert, "system_monitor"):
+                continue
             with self._speaking_lock:
                 speaking = self._is_speaking
             if speaking or (time.monotonic() - self._last_user_speech) < 10:
@@ -1931,6 +3186,16 @@ class JarvisLive:
                                 f"Inform the user about this development naturally in {lang}. "
                                 "One brief sentence only."
                             )
+                            monitor_text = alert.replace("[MONITOR_ALERT] ", "").strip()
+                            add_notification(
+                                "Background monitor",
+                                monitor_text,
+                                "background_monitor",
+                            )
+                            if focus_mode_active() or not should_interrupt(
+                                "Background monitor", monitor_text, "background_monitor"
+                            ):
+                                continue
                             await self.session.send_client_content(
                                 turns={"role": "user", "parts": [{"text": msg}]},
                                 turn_complete=True,
@@ -1952,7 +3217,7 @@ class JarvisLive:
         while True:
             await asyncio.sleep(60)   # evaluate once per minute
 
-            if not self.session or not self._awake:
+            if not self.session or not self._awake or focus_mode_active():
                 continue
 
             with self._speaking_lock:
@@ -1988,6 +3253,7 @@ class JarvisLive:
         """Forward phone mic PCM chunks from dashboard queue into the Gemini Live session."""
         q = self._dashboard._phone_audio_queue
         while True:
+            _transport_retry_delay = None
             try:
                 chunk = await asyncio.wait_for(q.get(), timeout=1.0)
             except asyncio.TimeoutError:
@@ -2025,10 +3291,12 @@ class JarvisLive:
                 if self.session:
                     # A remote command is deliberate control and the phone user
                     # has no desktop WAKE button — so it wakes JARVIS if asleep.
-                    if self._wake_enabled and not self._awake:
+                    if (self._wake_enabled or self._manual_sleep) and not self._awake:
                         self.wake(reason="remote command")
+                    context = self._active_app_context()
+                    payload = f"[ACTIVE APP CONTEXT]\n{context}\n\n[REMOTE COMMAND]\n{text}"
                     await self.session.send_client_content(
-                        turns={"role": "user", "parts": [{"text": text}]},
+                        turns={"role": "user", "parts": [{"text": payload}]},
                         turn_complete=True,
                     )
                     self.ui.write_log(f"[Web]: {text}")
@@ -2079,15 +3347,17 @@ class JarvisLive:
             self._dashboard = None
 
         while True:
+            if self._transport_retry_delay is not None:
+                _delay = self._transport_retry_delay
+                self._transport_retry_delay = None
+                await asyncio.sleep(_delay)
             try:
                 print("[JARVIS] Connecting...")
                 self.ui.set_state("THINKING")
                 _resumed_with = self._resume_handle is not None
                 config = self._build_config()
 
-                # Fresh client on every reconnect — avoids stale HTTP session state
-                # v1alpha carries proactive audio; if it gets rejected we fall
-                # back to v1beta.
+                # Fresh client on every reconnect — avoids stale HTTP session state.
                 client = genai.Client(
                     api_key=_get_api_key(),
                     http_options={"api_version": "v1alpha" if self._enhanced_live else "v1beta"}
@@ -2104,13 +3374,13 @@ class JarvisLive:
 
                     # Reset transient state that must not carry over from a previous session
                     self._pending_vision       = None
-                    self._vision_cam_active    = False
-                    self._vision_close_pending = False
                     self._vision_busy          = False
                     self._vision_last_time     = 0.0
                     self._interrupted          = False
 
                     print("[JARVIS] Connected.")
+                    # A successful session resets the transient transport backoff.
+                    self._conn_backoff = 3
                     if _resumed_with:
                         # Say it plainly: the difference between "it reconnected"
                         # and "it reconnected and still knows what we were doing"
@@ -2119,11 +3389,13 @@ class JarvisLive:
 
                     # Wake word: if enabled, come up ASLEEP (mic gated, silent)
                     # until the user says "Hey Jarvis" or taps wake in the UI.
-                    if self._wake_enabled:
+                    if self._wake_enabled or self._manual_sleep:
                         self._ensure_wake_detector()
                         self._awake = False
                         self.ui.set_state("SLEEPING")
-                        self.ui.write_log("SYS: JARVIS online — sleeping. Say 'Hey Jarvis' to wake me.")
+                        self.ui.write_log(
+                            "SYS: JARVIS online — sleeping. Say 'wake up Jarvis' or 'Hey Jarvis' to wake me."
+                        )
                     else:
                         self._awake = True
                         self.ui.set_state("LISTENING")
@@ -2192,6 +3464,25 @@ class JarvisLive:
                     continue
 
                 err_str = str(e)
+
+                # Gemini Live can occasionally terminate the WebSocket with 1011
+                # ("Internal error encountered"). Treat this as a transient
+                # transport failure, not as a sleep request. ExceptionGroups from
+                # the TaskGroup are unwrapped by _is_live_internal_error().
+                if _is_live_internal_error(e):
+                    _retry_delay = max(3, int(getattr(self, "_conn_backoff", 3)))
+                    self._transport_retry_delay = _retry_delay
+                    self._conn_backoff = min(_retry_delay * 2, 60)
+                    self.ui.write_log(
+                        f"NET: Gemini Live interrupted (1011). "
+                        f"Recovering in {_retry_delay}s."
+                    )
+                    print(
+                        f"[JARVIS] ⚠️ Live connection interrupted (1011). "
+                        f"Retrying in {_retry_delay}s."
+                    )
+                    continue
+
                 print(f"[JARVIS] Error ({type(e).__name__}): {e}")
                 traceback.print_exc()
 
@@ -2253,7 +3544,7 @@ class JarvisLive:
             finally:
                 self.session = None
                 # Only save if there was a real conversation (≥3 turns)
-                if len(self._session_log) >= 3:
+                if len(self._session_log) >= 3 and self._transport_retry_delay is None:
                     asyncio.create_task(self._save_session_summary())
 
             self.set_speaking(False)
@@ -2267,6 +3558,7 @@ class JarvisLive:
             await asyncio.sleep(delay)
 
 def main():
+    install_crash_detective_hooks(logger=lambda msg: print(msg))
     ui = JarvisUI("face.png")
 
     def runner():

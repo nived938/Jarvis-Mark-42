@@ -21,6 +21,8 @@ import queue
 import subprocess
 import sys
 import threading
+import re
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -127,37 +129,55 @@ class WakeWordDetector:
         self._thread: threading.Thread | None = None
         self._running = False
         self._model = None
+        self._phrase_stt = None
         self._ready = False
+        self._last_phrase_wake = 0.0
 
     def start(self) -> bool:
-        """Load the model and spawn the inference thread. Returns True on success.
-        Safe to call again — a no-op if already running. Never raises."""
+        """Start any available local wake engine. Never raises."""
         if self._running:
             return True
+
+        openwake_ok = False
         try:
             from openwakeword.model import Model
             self._model = Model(wakeword_models=[WAKE_MODEL], inference_framework="onnx")
+            openwake_ok = True
         except Exception as e:
-            self._logger(f"Wake word: could not load model — {e}")
-            self._notify("Wake word unavailable — use the WAKE NOW button.")
             self._model = None
+            self._logger(f"Wake word: Hey Jarvis engine unavailable ({e}).")
+
+        try:
+            from core.stt import VoskSTT
+            self._phrase_stt = VoskSTT(language="en-us")
+            self._logger("Wake word: also listening for 'wake up Jarvis'.")
+        except Exception as e:
+            self._phrase_stt = None
+            self._logger(f"Wake phrase engine unavailable ({e}).")
+
+        if not openwake_ok and self._phrase_stt is None:
+            self._notify("No local wake engine is available — use the WAKE NOW button.")
+            self._ready = False
             return False
+
         self._running = True
         self._ready = True
         self._thread = threading.Thread(target=self._loop, daemon=True, name="WakeWordThread")
         self._thread.start()
-        self._logger("Wake word: listening for 'Hey Jarvis'.")
+        if openwake_ok:
+            self._logger("Wake word: listening for 'Hey Jarvis'.")
         return True
 
     def stop(self) -> None:
         self._running = False
-        # unblock the thread if it's waiting on the queue
         try:
             self._queue.put_nowait(None)
         except Exception:
             pass
         self._model = None
+        self._phrase_stt = None
         self._ready = False
+
 
     @property
     def ready(self) -> bool:
@@ -184,7 +204,7 @@ class WakeWordDetector:
                 frame = self._queue.get()
                 if frame is None or not self._running:
                     break
-                scores = self._model.predict(np.asarray(frame, dtype=np.int16))
+                scores = self._model.predict(np.asarray(frame, dtype=np.int16)) if self._model is not None else {}
                 score = 0.0
                 if isinstance(scores, dict):
                     # match the jarvis model regardless of exact key suffix
@@ -193,8 +213,24 @@ class WakeWordDetector:
                             score = max(score, float(v))
                     if score == 0.0 and scores:
                         score = max(float(v) for v in scores.values())
-                if score >= self._threshold:
-                    # drain any backlog so we don't double-fire on the same utterance
+                phrase_hit = False
+                if self._phrase_stt is not None:
+                    try:
+                        _text, _final = self._phrase_stt.process_chunk(
+                            np.asarray(frame, dtype=np.int16).tobytes()
+                        )
+                        norm = re.sub(r"[^a-z0-9]+", " ", (_text or "").lower()).strip()
+                        phrase_hit = bool(_final and (
+                            "wake up jarvis" in norm or "wake jarvis" in norm
+                        ))
+                    except Exception:
+                        phrase_hit = False
+
+                if score >= self._threshold or phrase_hit:
+                    now = time.monotonic()
+                    if now - self._last_phrase_wake < 2.0:
+                        continue
+                    self._last_phrase_wake = now
                     self._drain()
                     try:
                         self._on_detect()

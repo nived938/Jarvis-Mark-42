@@ -342,6 +342,25 @@ def _compare(items: list[str], aspect: str) -> str:
 
 # ── Public entry point ─────────────────────────────────────────────────────────
 
+def _looks_like_weather_query(query: str) -> bool:
+    q = str(query or "").strip().lower()
+    if q in {"weather", "weather today", "weather now", "forecast", "weather forecast"}:
+        return True
+    return bool(
+        "weather in " in q
+        or "weather for " in q
+        or "weather at " in q
+        or "forecast in " in q
+        or "forecast for " in q
+    )
+
+
+def _weather_city_from_query(query: str) -> str:
+    import re
+    m = re.search(r"\b(?:weather|forecast)\s+(?:in|for|at)\s+(.+)$", str(query or ""), re.I)
+    return m.group(1).strip() if m else ""
+
+
 def web_search(
     parameters:     dict,
     response=None,
@@ -364,6 +383,20 @@ def web_search(
         player.write_log(f"[Search:{mode}] {query or ', '.join(items)}")
 
     print(f"[WebSearch] 🔍 mode={mode!r}  query={query!r}")
+
+    # Weather has its own first-class API path. Even if the model accidentally
+    # routes a weather question to web_search, never send it to search engines.
+    if mode == "search" and query and _looks_like_weather_query(query):
+        from actions.weather_report import weather_action
+        report = "forecast" if any(
+            word in query.lower()
+            for word in ("forecast", "tomorrow", "next few days", "this week")
+        ) else "current"
+        return weather_action(
+            {"city": _weather_city_from_query(query), "report": report, "days": 5},
+            player=player,
+            session_memory=session_memory,
+        )
 
     try:
         if mode == "compare" and items:
