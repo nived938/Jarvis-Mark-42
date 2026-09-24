@@ -836,6 +836,7 @@ class JarvisLive:
         # "yesterday we talked about…" line silently disappears.
         self._resume_handle: str | None = None
         self._turn_done_event: asyncio.Event | None = None
+        self._transport_retry_delay: float | None = None
         self._dashboard     = None
         self._briefing_sent    = False          # morning briefing fires once per process
         self._sys_monitor      = SystemMonitor()  # persistent cooldown state
@@ -2996,7 +2997,10 @@ class JarvisLive:
             self._dashboard = None
 
         while True:
-            _transport_retry_delay = None
+            if self._transport_retry_delay is not None:
+                _delay = self._transport_retry_delay
+                self._transport_retry_delay = None
+                await asyncio.sleep(_delay)
             try:
                 print("[JARVIS] Connecting...")
                 self.ui.set_state("THINKING")
@@ -3117,7 +3121,7 @@ class JarvisLive:
                 # the TaskGroup are unwrapped by _is_live_internal_error().
                 if _is_live_internal_error(e):
                     _retry_delay = max(3, int(getattr(self, "_conn_backoff", 3)))
-                    _transport_retry_delay = _retry_delay
+                    self._transport_retry_delay = _retry_delay
                     self._conn_backoff = min(_retry_delay * 2, 60)
                     self.ui.write_log(
                         f"NET: Gemini Live interrupted (1011). "
@@ -3190,15 +3194,8 @@ class JarvisLive:
             finally:
                 self.session = None
                 # Only save if there was a real conversation (≥3 turns)
-                if len(self._session_log) >= 3:
+                if len(self._session_log) >= 3 and self._transport_retry_delay is None:
                     asyncio.create_task(self._save_session_summary())
-
-            if _transport_retry_delay is not None:
-                # Keep the HUD out of the normal sleep state while the Live
-                # transport is automatically recovering from a transient 1011.
-                self.set_speaking(False)
-                await asyncio.sleep(_transport_retry_delay)
-                continue
 
             self.set_speaking(False)
             self.ui.set_state("SLEEPING")
