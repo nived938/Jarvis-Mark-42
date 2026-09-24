@@ -142,11 +142,19 @@ Monitoring services are designed to avoid producing repetitive activity-log nois
 
 - Android device discovery through ADB
 - USB or wireless ADB connect/disconnect
-- third-party app listing and app launch
-- URL opening, tap, swipe, text input, and key events
+- full Android navigation: Home, Back, Recents, Power/Wake
+- direct tap, swipe, text input, keyboard/keyevent control
+- app discovery, launch, force-stop, package inspection, install/uninstall
+- Android Settings page opening, notification shade, quick settings
+- volume and display-brightness control
+- current foreground app inspection
+- file push/pull between the PC and Android device
 - Android screenshots saved locally
 - battery and storage inspection
-- optional scrcpy screen mirroring
+- live scrcpy cast embedded directly in the JARVIS HUD
+- direct mouse and keyboard control of the phone from the embedded HUD
+- optional Android audio forwarding through scrcpy
+- no companion app installed on the Android device
 
 ## Safety
 
