@@ -230,3 +230,13 @@ These should not be reintroduced accidentally while documenting or extending the
 - coordinate location of visible targets
 - visual click activation through the existing screen-vision backend
 - reuses the existing Gemini-powered screen element finder rather than creating a second vision stack
+
+## Geoapify Maps HUD
+
+- Leaflet map in the center HUD
+- Geoapify raster map tiles
+- forward geocoding for place/address search
+- nearby Places API category search
+- interactive result markers
+- local Python bridge for Geoapify requests
+- routing endpoint available through the bridge
