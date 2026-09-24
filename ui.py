@@ -3707,6 +3707,23 @@ class GeoapifyMapsHudView(QWidget):
             return
         self.open_map(query)
 
+    def locate_user(self) -> None:
+        """Center the loaded map on JARVIS's approximate current location."""
+        if not _GEO_MAP_WEBENGINE or self._web is None:
+            self._set_status("WEBENGINE REQUIRED")
+            return
+        try:
+            self._web.page().runJavaScript("locateUser();")
+        except Exception as exc:
+            self._set_status("LOCATION ERROR")
+            self._web.setHtml(
+                "<html><body style='background:#00060a;color:#8ffcff;"
+                "font-family:Consolas;padding:24px'>"
+                "<h3>Geoapify Maps</h3>"
+                f"<p>{str(exc).replace('&','&amp;').replace('<','&lt;')}</p>"
+                "</body></html>"
+            )
+
     def _on_loaded(self, ok: bool) -> None:
         self._set_status("ONLINE" if ok else "LOAD ERROR")
 
@@ -4112,6 +4129,15 @@ class MainWindow(QMainWindow):
         """Thread-safe: open/search Geoapify Maps in the center HUD."""
         try:
             self._geo_maps_sig.emit(str(query or ""))
+        except Exception:
+            pass
+
+    def locate_geoapify_maps(self) -> None:
+        """Thread-safe: center the Geoapify map on approximate current location."""
+        try:
+            if self._hud_cam_stack.currentIndex() != 5:
+                self._hud_cam_stack.setCurrentIndex(5)
+            self._geo_maps_hud.locate_user()
         except Exception:
             pass
 
@@ -6645,6 +6671,13 @@ class JarvisUI:
             return bool(self._win.is_geo_maps_hud_open())
         except Exception:
             return False
+
+    def locate_geoapify_maps(self) -> None:
+        """Thread-safe: center the Geoapify map on approximate current location."""
+        try:
+            self._win.locate_geoapify_maps()
+        except Exception:
+            pass
 
     def show_local_ai_picker(self) -> None:
         """Thread-safe: load and show the Local AI model picker."""
