@@ -61,8 +61,10 @@ def timer(parameters=None, player=None, **_) -> str:
     if action in {"start", "set", "begin"}:
         try:
             seconds = _parse_duration(p.get("duration") or p.get("seconds"))
-            player.start_countdown_timer(seconds, "TIMER")
-            return f"Timer set for {seconds:g} seconds."
+            title = str(p.get("title") or "TIMER").strip() or "TIMER"
+            finished_kind = str(p.get("finished_kind") or "timer").strip().lower() or "timer"
+            player.start_countdown_timer(seconds, title, finished_kind)
+            return f"{title} set for {seconds:g} seconds."
         except Exception as exc:
             return f"Could not start timer: {exc}"
 
@@ -108,6 +110,14 @@ TOOL = {
             "seconds": {
                 "type": "NUMBER",
                 "description": "Duration in seconds.",
+            },
+            "title": {
+                "type": "STRING",
+                "description": "HUD title, normally TIMER; use STOPWATCH for a timed stopwatch.",
+            },
+            "finished_kind": {
+                "type": "STRING",
+                "description": "Completion event name, normally timer; use stopwatch for a timed stopwatch.",
             },
         },
         "required": ["action"],
