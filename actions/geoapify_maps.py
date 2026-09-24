@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 from typing import Any
 from core import geoapify_maps
 
@@ -29,7 +30,7 @@ def _handler(parameters=None, player=None, **_):
     if action == "route":
         if not hasattr(player, "show_geoapify_route"):
             return "Geoapify road routing is unavailable in the current UI."
-        m = __import__("re").fullmatch(r"(.+?)\s+to\s+(.+)", query, flags=__import__("re").IGNORECASE)
+        m = re.fullmatch(r"(.+?)\s+to\s+(.+)", query, flags=re.IGNORECASE)
         if not m:
             return "For a route, provide two places like 'Kasaragod to Kalanad'."
         player.show_geoapify_route(m.group(1).strip(), m.group(2).strip())
