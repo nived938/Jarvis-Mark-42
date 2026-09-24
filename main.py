@@ -1704,8 +1704,8 @@ class JarvisLive:
                     f"SYS: Geoapify road route — {start} → {end}"
                 )
                 self.speak(
-                    f"Sir, I am calculating the road route from {start} to {end "
-                    "} and showing it on the map."
+                    f"Sir, I am calculating the road route from {start} to {end} "
+                    "and showing it on the map."
                 )
             except Exception as exc:
                 self.ui.write_log(f"ERR: Geoapify road route failed — {exc}")
