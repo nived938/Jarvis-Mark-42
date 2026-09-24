@@ -1425,6 +1425,7 @@ class CountdownHud(QFrame):
         self._timer.timeout.connect(self._tick)
         self._deadline = 0.0
         self._mode = "timer"
+        self._finished_kind = "timer"
         self._running = False
         self.hide()
 
@@ -1436,9 +1437,10 @@ class CountdownHud(QFrame):
             return f"{hours:02d}:{minutes:02d}:{secs:02d}"
         return f"{minutes:02d}:{secs:02d}"
 
-    def start_countdown(self, seconds: float, title: str = "TIMER") -> None:
+    def start_countdown(self, seconds: float, title: str = "TIMER", finished_kind: str = "timer") -> None:
         seconds = max(0.1, float(seconds))
         self._mode = "timer"
+        self._finished_kind = str(finished_kind or "timer").strip().lower()
         self._title.setText(str(title or "TIMER").upper())
         self._deadline = time.monotonic() + seconds
         self._running = True
@@ -1483,7 +1485,7 @@ class CountdownHud(QFrame):
             if value <= 0.0:
                 self._value.setText("00:00")
                 self.stop(hide=True)
-                self.finished.emit("timer")
+                self.finished.emit(self._finished_kind)
                 return
         self._value.setText(self._format(value))
 
@@ -3936,7 +3938,7 @@ class MainWindow(QMainWindow):
     _geo_maps_locate_sig = pyqtSignal()
     _geo_maps_set_location_sig = pyqtSignal()
     _geo_maps_route_sig = pyqtSignal(str, str)
-    _countdown_start_sig = pyqtSignal(float, str)
+    _countdown_start_sig = pyqtSignal(float, str, str)
     _countdown_cancel_sig = pyqtSignal()
     _stopwatch_start_sig = pyqtSignal(float)
     _stopwatch_stop_sig = pyqtSignal()
@@ -6496,9 +6498,13 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    def _start_countdown_on_qt_thread(self, seconds: float, title: str) -> None:
+    def _start_countdown_on_qt_thread(self, seconds: float, title: str, finished_kind: str) -> None:
         try:
-            self._countdown_hud.start_countdown(float(seconds), str(title or "TIMER"))
+            self._countdown_hud.start_countdown(
+                float(seconds),
+                str(title or "TIMER"),
+                str(finished_kind or "timer"),
+            )
         except Exception as exc:
             self._log.append_log(f"ERR: Countdown start failed — {exc}")
 
@@ -6520,9 +6526,18 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    def start_countdown_timer(self, seconds: float, title: str = "TIMER") -> None:
+    def start_countdown_timer(
+        self,
+        seconds: float,
+        title: str = "TIMER",
+        finished_kind: str = "timer",
+    ) -> None:
         try:
-            self._countdown_start_sig.emit(float(seconds), str(title or "TIMER"))
+            self._countdown_start_sig.emit(
+                float(seconds),
+                str(title or "TIMER"),
+                str(finished_kind or "timer"),
+            )
         except Exception:
             pass
 
