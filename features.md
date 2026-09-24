@@ -240,3 +240,12 @@ These should not be reintroduced accidentally while documenting or extending the
 - interactive result markers
 - local Python bridge for Geoapify requests
 - routing endpoint available through the bridge
+
+## Geoapify map location and search
+
+- persistent user-selected map location stored locally and ignored by Git
+- click-to-set blue location marker
+- zoom to saved location with `where is my location`
+- named-place searches biased to the saved location
+- `near me` searches constrained around the saved location
+- map search box updates the current map without reloading the page
