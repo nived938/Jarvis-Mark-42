@@ -2029,6 +2029,34 @@ class JarvisLive:
             self.speak("Sir, the timer has been cancelled.")
             return True
 
+        # A duration on a "stopwatch" request means: run the stopwatch for that
+        # duration, then stop it automatically. Plain "start stopwatch" remains
+        # a normal count-up stopwatch.
+        timed_stopwatch_match = _re.fullmatch(
+            rf"(?:set|start|begin|create)\s+(?:a\s+)?{_duration_re}\s+(?:countdown\s+)?stopwatch",
+            low,
+            flags=_re.IGNORECASE,
+        )
+        if timed_stopwatch_match:
+            duration = timed_stopwatch_match.group("duration").strip()
+            # Clear any persisted count-up stopwatch state so the timed HUD cannot
+            # leave a hidden stopwatch running in the background.
+            self._run_local_action("stopwatch", {"action": "stop"})
+            result = self._run_local_action(
+                "timer",
+                {
+                    "action": "start",
+                    "duration": duration,
+                    "title": "STOPWATCH",
+                    "finished_kind": "stopwatch",
+                },
+            )
+            if result.lower().startswith("stopwatch set for"):
+                self.speak(f"Sir, stopwatch set for {duration}.")
+            else:
+                self.speak("Sir, I couldn't start that timed stopwatch.")
+            return True
+
         # Local stopwatch controls: no Gemini round trip is needed for timing.
         stopwatch_cmds = {
             "start stopwatch": "start",
@@ -2042,6 +2070,20 @@ class JarvisLive:
             "lap stopwatch": "lap",
             "record lap": "lap",
         }
+        if low in {
+            "close stopwatch",
+            "close the stopwatch",
+            "hide stopwatch",
+            "hide the stopwatch",
+            "dismiss stopwatch",
+            "dismiss the stopwatch",
+        }:
+            self._run_local_action("stopwatch", {"action": "stop"})
+            self._run_local_action("timer", {"action": "cancel"})
+            self.ui.stop_stopwatch_hud()
+            self.speak("Sir, the stopwatch has been closed.")
+            return True
+
         if low in stopwatch_cmds:
             self._run_local_action("stopwatch", {"action": stopwatch_cmds[low]})
             return True
@@ -2307,8 +2349,13 @@ class JarvisLive:
         self.ui.write_log("SYS: Interrupted — listening...")
 
     def _on_timer_finished(self, kind: str = "timer") -> None:
-        """Announce countdown completion after the HUD timer reaches zero."""
-        if str(kind or "timer").lower() != "timer":
+        """Announce countdown or timed-stopwatch completion after the HUD reaches zero."""
+        mode = str(kind or "timer").strip().lower()
+        if mode == "stopwatch":
+            self.ui.write_log("SYS: Timed stopwatch finished.")
+            self.speak("Sir, the stopwatch has finished.")
+            return
+        if mode != "timer":
             return
         self.ui.write_log("SYS: Timer finished.")
         self.speak("Sir, the timer has ended.")
