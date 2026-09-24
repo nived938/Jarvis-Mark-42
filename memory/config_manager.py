@@ -104,6 +104,22 @@ def save_voice(voice_name: str) -> None:
     CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
 
 
+# ── Local AI / Ollama ────────────────────────────────────────────────────────
+def get_local_ai_enabled() -> bool:
+    """Whether JARVIS may use the local Ollama fallback/router."""
+    return bool(load_api_keys().get("local_ai_enabled", True))
+
+
+def save_local_ai_enabled(enabled: bool) -> None:
+    _save_flag("local_ai_enabled", enabled)
+
+
+def get_ollama_base_url() -> str:
+    """Base URL for the local Ollama HTTP API."""
+    value = str(load_api_keys().get("ollama_base_url", "http://127.0.0.1:11434") or "").strip()
+    return value.rstrip("/") or "http://127.0.0.1:11434"
+
+
 def get_wake_word_enabled() -> bool:
     """Whether local wake-word gating is on (assistant sleeps until 'Hey Jarvis')."""
     return load_api_keys().get("wake_word_enabled", False)
