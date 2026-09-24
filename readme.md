@@ -5,7 +5,7 @@ A Python desktop AI assistant with realtime voice conversation, a visual HUD, pe
 Current development branch:
 
 ```text
-mark-43-context-automation
+feature/intelligence-companion
 ```
 
 Repository:
@@ -14,7 +14,7 @@ Repository:
 nived938/Jarvis-Mark-42
 ```
 
-> **Current source of truth:** this README and the companion docs describe the code on the current Mark 43 branch. Older documentation or feature lists may describe removed or experimental behavior.
+> **Current source of truth:** this README and the companion docs describe the code on the current intelligence/android extension branch. Older documentation or feature lists may describe removed or experimental behavior.
 
 ---
 
