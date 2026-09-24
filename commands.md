@@ -205,3 +205,36 @@ go back
 ```
 
 This applies to the camera HUD, weather HUD, result HUD, and Local AI picker.
+## Crash Detective
+
+```text
+show crash detective
+show crash report
+show latest crash report
+crash report
+```
+
+Crash reports are captured locally for unhandled Python exceptions in the main process and threads, then displayed in the center HUD.
+
+## Network Quality Monitor
+
+```text
+show network quality
+check network quality
+check internet quality
+network diagnostics
+check network
+show network diagnostics
+```
+
+The center HUD shows quality, latency, packet loss, DNS resolution, HTTPS reachability, and active interfaces. Recent checks are retained locally for history.
+
+## Visual UI recognition
+
+```text
+find the blue Export button on the screen
+locate the Settings gear on screen
+click the green Save button on the screen
+```
+
+JARVIS uses the existing screen-vision pipeline to locate UI elements by natural-language description and can click the recognized target.
