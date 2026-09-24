@@ -3698,7 +3698,10 @@ class MainWindow(QMainWindow):
         self._weather_view.open_view()
 
     def _on_weather_closed(self) -> None:
-        self._hud_cam_stack.setCurrentIndex(0)
+        # A weather fade-out can finish after another center HUD (such as a
+        # Gmail/calendar result) has already taken over the stack.
+        if self._hud_cam_stack.currentIndex() == 2:
+            self._hud_cam_stack.setCurrentIndex(0)
 
     def _close_weather_now(self) -> None:
         try:
