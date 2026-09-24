@@ -517,19 +517,42 @@ function putMyLocation(lat,lon,label='MY LOCATION'){
   myLocationMarker.bindPopup('<b>MY LOCATION</b><br>'+esc(label));
 }
 
-function loadSavedLocation(){
-  fetch('/api/saved-location')
-    .then(r=>r.json())
-    .then(p=>{
-      if(p.saved && Number.isFinite(p.lat) && Number.isFinite(p.lon)){
-        const label=[p.city,p.region,p.country].filter(Boolean).join(', ') || 'Saved map location';
-        putMyLocation(p.lat,p.lon,label);
-        map.setView([p.lat,p.lon],13,{animate:false});
-      }
-    })
-    .catch(()=>{});
+async function loadSavedLocation(center=true){
+  try{
+    const r=await fetch('/api/saved-location');
+    const p=await r.json();
+    if(p.saved && Number.isFinite(p.lat) && Number.isFinite(p.lon)){
+      const label=p.formatted||[p.city,p.region,p.country].filter(Boolean).join(', ')||'Saved map location';
+      putMyLocation(p.lat,p.lon,label);
+      if(center)map.setView([p.lat,p.lon],13,{animate:false});
+      return p;
+    }
+  }catch(_){}
+  return null;
 }
 
+async function loadPlaceDetails(marker, x){
+  if(!x.place_id)return;
+  try{
+    const r=await fetch('/api/place-details?'+new URLSearchParams({id:x.place_id}));
+    const p=await r.json();
+    if(!r.ok)throw Error(p.error||'Place details failed');
+    const feature=(p.features||[]).find(f=>f.properties&&f.properties.feature_type==='details')
+      || (p.features||[]).find(f=>f.properties);
+    if(!feature)return;
+    const d=feature.properties||{};
+    const lines=[
+      '<b>'+esc(x.name||d.name||'Location')+'</b>',
+      esc(d.formatted||x.formatted||''),
+      d.phone?'<br>☎ '+esc(d.phone):'',
+      d.website?'<br><a href="'+esc(d.website)+'" target="_blank">Website</a>':'',
+      d.opening_hours?'<br>Hours: '+esc(d.opening_hours):''
+    ].filter(Boolean);
+    marker.bindPopup(lines.join('')).openPopup();
+  }catch(e){
+    marker.bindPopup('<b>'+esc(x.name||'Location')+'</b><br>'+esc(x.formatted||'')).openPopup();
+  }
+}
 function showResults(p){
   markers.clearLayers();
   const rows=p.results||[];
@@ -537,22 +560,23 @@ function showResults(p){
     status.textContent='NO RESULTS';
     return;
   }
-  rows.forEach(x=>{
+  rows.forEach((x,i)=>{
     const m=L.marker([x.lat,x.lon]).addTo(markers);
     const distance = x.distance != null ? '<br>'+Math.round(Number(x.distance))+' m away' : '';
     m.bindPopup('<b>'+esc(x.name||'Location')+'</b><br>'+esc(x.formatted||'')+distance);
+    m.on('click',()=>loadPlaceDetails(m,x));
+    if(i===0)m.openPopup();
   });
 
-  if(p.kind==='places'){
+  if(p.kind==='places' && rows.length>1){
     const b=rows.map(x=>[x.lat,x.lon]);
     map.fitBounds(b,{padding:[36,36],maxZoom:16});
   }else{
-    // Text/address searches can return candidates spread across a country.
-    // Focus the map on the best result instead of zooming all the way out.
-    map.setView([rows[0].lat,rows[0].lon],15,{animate:true});
+    // Named searches such as "Lulu Mall" focus tightly on the best geocoded POI.
+    map.setView([rows[0].lat,rows[0].lon],16,{animate:true});
   }
 
-  status.textContent=(p.kind==='places'?'PLACES':'SEARCH')+' • '+rows.length+' RESULT(S)';
+  status.textContent=(p.kind==='places'?'PLACES':'GEOCODE')+' • '+rows.length+' RESULT(S)';
 }
 
 async function enableSetLocation(){
@@ -565,15 +589,16 @@ map.on('click',async e=>{
   if(!setLocationMode)return;
   setLocationMode=false;
   map.getContainer().style.cursor='';
-  status.textContent='SAVING LOCATION…';
+  status.textContent='LOOKING UP ADDRESS…';
   try{
     const r=await fetch('/api/set-location?'+new URLSearchParams({lat:e.latlng.lat,lon:e.latlng.lng}));
     const p=await r.json();
     if(!r.ok) throw Error(p.error||'Could not save location');
-    putMyLocation(p.lat,p.lon,'User-selected map location');
+    const label=p.formatted||[p.city,p.region,p.country].filter(Boolean).join(', ')||'User-selected map location';
+    putMyLocation(p.lat,p.lon,label);
     map.setView([p.lat,p.lon],16,{animate:true});
-    myLocationMarker.openPopup();
-    status.textContent='LOCATION SAVED';
+    myLocationMarker.bindPopup('<b>MY LOCATION</b><br>'+esc(label)).openPopup();
+    status.textContent='LOCATION SAVED • '+label;
   }catch(err){
     status.textContent='LOCATION ERROR: '+err.message;
   }
@@ -636,9 +661,13 @@ async function routeBetween(fromText,toText){
     status.textContent='ROUTE ERROR: '+e.message;
   }
 }
-loadSavedLocation();
 const initialQuery=new URLSearchParams(location.search).get('q')||'';
-if(initialQuery)searchMap(initialQuery);
+(async function initializeMap(){
+  // For an initial search, wait for the saved location first so its centering
+  // cannot race the Geoapify search result and hide a named POI.
+  await loadSavedLocation(!initialQuery);
+  if(initialQuery)await searchMap(initialQuery);
+})();
 </script></body></html>"""
     return html.replace("__LEAFLET_CSS__", _LEAFLET_CSS).replace("__LEAFLET_JS__", _LEAFLET_JS)
 
