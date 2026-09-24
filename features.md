@@ -1,6 +1,6 @@
 # Features
 
-This is the current feature inventory for the Mark 43 branch.
+This is the current feature inventory for the Mark 43 line plus the intelligence/android extension branch.
 
 ## Voice and Live conversation
 
@@ -87,6 +87,10 @@ This is the current feature inventory for the Mark 43 branch.
 - goals/OKR tracking
 - notification inbox
 - focus mode
+- personal habit learning from compact local activity aggregates
+- storage cleanup intelligence with safe cache/temp analysis
+- Environment Doctor diagnostics
+- Hardware Health Center
 
 ## Google integrations
 
@@ -120,11 +124,29 @@ Supports:
 - application crash guardian
 - USB/PnP device intelligence
 - download watcher
+- automatic download organizer
 - screen-change sentinel
 - local audio-event detection
 - optional gesture recognition
 
 Monitoring services are designed to avoid producing repetitive activity-log noise.
+
+## Reasoning and autonomy
+
+- context-driven intent resolution instead of rigid phrase scripts
+- JARVIS reasoning tier for complex, multi-step, diagnostic, and decision-heavy requests
+- changed-approach recovery when a tool fails
+- compact decision summaries without exposing private chain-of-thought
+
+## Android Companion
+
+- Android device discovery through ADB
+- USB or wireless ADB connect/disconnect
+- third-party app listing and app launch
+- URL opening, tap, swipe, text input, and key events
+- Android screenshots saved locally
+- battery and storage inspection
+- optional scrcpy screen mirroring
 
 ## Safety
 
