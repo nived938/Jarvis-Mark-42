@@ -3650,6 +3650,7 @@ class GeoapifyMapsHudView(QWidget):
         self._map_ready = False
         self._pending_locate = False
         self._pending_set_location = False
+        self._pending_route: tuple[str, str] | None = None
         if _GEO_MAP_WEBENGINE:
             self._web = QWebEngineView(self)
             self._web.setStyleSheet(f"border: 1px solid {C.BORDER_B};")
@@ -3705,6 +3706,30 @@ class GeoapifyMapsHudView(QWidget):
                     "</body></html>"
                 )
 
+    def route_between(self, start: str, end: str) -> None:
+        """Draw a driving route between two named locations."""
+        start = str(start or "").strip()
+        end = str(end or "").strip()
+        if not start or not end:
+            return
+        self._pending_route = (start, end)
+        if not self._map_ready:
+            return
+        self._pending_route = None
+        if not _GEO_MAP_WEBENGINE or self._web is None:
+            self._set_status("WEBENGINE REQUIRED")
+            return
+        try:
+            import json as _json
+            self._set_status("ROUTING")
+            self._web.page().runJavaScript(
+                f"routeBetween({_json.dumps(start, ensure_ascii=False)},"
+                f"{_json.dumps(end, ensure_ascii=False)});"
+            )
+        except Exception:
+            self._pending_route = (start, end)
+            self._set_status("ROUTE ERROR")
+
     def search_current(self) -> None:
         query = self._search.text().strip()
         if not query:
@@ -3758,7 +3783,13 @@ class GeoapifyMapsHudView(QWidget):
         self._set_status("ONLINE" if ok else "LOAD ERROR")
         if not ok or self._web is None:
             return
-        if self._pending_set_location:
+        if self._pending_route:
+            start, end = self._pending_route
+            QTimer.singleShot(
+                250,
+                lambda s=start, e=end: self.route_between(s, e),
+            )
+        elif self._pending_set_location:
             QTimer.singleShot(250, self.set_location_mode)
         elif self._pending_locate:
             QTimer.singleShot(250, self.locate_user)
@@ -3793,6 +3824,7 @@ class MainWindow(QMainWindow):
     _geo_maps_sig    = pyqtSignal(str)
     _geo_maps_locate_sig = pyqtSignal()
     _geo_maps_set_location_sig = pyqtSignal()
+    _geo_maps_route_sig = pyqtSignal(str, str)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -3981,6 +4013,7 @@ class MainWindow(QMainWindow):
         self._geo_maps_sig.connect(self._show_geo_maps)
         self._geo_maps_locate_sig.connect(self._locate_geo_maps_on_qt_thread)
         self._geo_maps_set_location_sig.connect(self._set_geoapify_location_on_qt_thread)
+        self._geo_maps_route_sig.connect(self._show_geoapify_route)
         self._cam_stop = threading.Event()
         self._cam_thread = None
 
@@ -4149,6 +4182,15 @@ class MainWindow(QMainWindow):
             return False
 
 
+    def _show_geoapify_route(self, start: str, end: str) -> None:
+        """Show and draw a two-place driving route on the Qt thread."""
+        try:
+            if self._hud_cam_stack.currentIndex() != 5:
+                self._show_geo_maps("")
+            self._geo_maps_hud.route_between(start, end)
+        except Exception as exc:
+            self.write_log(f"ERR: Geoapify route UI failed — {exc}")
+
     def _show_geo_maps(self, query: str = "") -> None:
         """Show the Geoapify map HUD on the Qt thread."""
         try:
@@ -4169,6 +4211,13 @@ class MainWindow(QMainWindow):
         """Thread-safe: open/search Geoapify Maps in the center HUD."""
         try:
             self._geo_maps_sig.emit(str(query or ""))
+        except Exception:
+            pass
+
+    def show_geoapify_route(self, start: str, end: str) -> None:
+        """Thread-safe: draw a driving route between two places."""
+        try:
+            self._geo_maps_route_sig.emit(str(start or ""), str(end or ""))
         except Exception:
             pass
 
@@ -6726,6 +6775,13 @@ class JarvisUI:
         """Thread-safe: open/search the Geoapify map HUD."""
         try:
             self._win.show_geoapify_maps(str(query or ""))
+        except Exception:
+            pass
+
+    def show_geoapify_route(self, start: str, end: str) -> None:
+        """Thread-safe: draw a driving route between two locations."""
+        try:
+            self._win.show_geoapify_route(str(start or ""), str(end or ""))
         except Exception:
             pass
 
