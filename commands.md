@@ -241,3 +241,18 @@ click the green Save button on the screen
 ```
 
 JARVIS uses the existing screen-vision pipeline to locate UI elements by natural-language description and can click the recognized target.
+
+## Geoapify Maps
+
+```text
+open maps
+show maps
+search maps for coffee shops
+find maps for hospitals
+look up maps for Lulu Mall
+show map of Bengaluru
+open map of Kanhangad
+close
+```
+
+The map opens in the center HUD and supports address search plus nearby place-category searches.
