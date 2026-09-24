@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from core.local_model_router import generate, installed_models, select_model, is_available
+from memory.config_manager import get_local_ai_enabled, save_local_ai_enabled
 
 
 def _handler(parameters=None, **_):
@@ -11,11 +12,18 @@ def _handler(parameters=None, **_):
     if action == "status":
         models = sorted(installed_models())
         return (
-            "Ollama local AI is "
+            "Local AI is "
+            + ("enabled" if get_local_ai_enabled() else "disabled")
+            + "; Ollama is "
             + ("available" if is_available() else "not reachable")
             + ". Installed models: "
             + (", ".join(models) if models else "none")
         )
+
+    if action in {"enable", "disable"}:
+        enabled = action == "enable"
+        save_local_ai_enabled(enabled)
+        return f"Local AI {'enabled' if enabled else 'disabled'}."
 
     if action == "models":
         models = sorted(installed_models(refresh=True))
@@ -54,7 +62,7 @@ TOOL = {
     "parameters": {
         "type": "OBJECT",
         "properties": {
-            "action": {"type": "STRING", "description": "ask | status | models"},
+            "action": {"type": "STRING", "description": "ask | status | models | enable | disable"},
             "prompt": {"type": "STRING", "description": "Prompt to send to the local model"},
             "mode": {"type": "STRING", "description": "fast | balanced | smart | vision"},
             "system": {"type": "STRING", "description": "Optional system instruction"},
