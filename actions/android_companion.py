@@ -150,15 +150,17 @@ def _handler(parameters, **_):
         if not filename.lower().endswith(".png"):
             filename += ".png"
         dest = SCREEN_DIR / filename
-        ok, out = _run([*_device_arg(serial), "exec-out", "screencap", "-p"], timeout=20)
-        if not ok:
-            return out or "Android screenshot failed."
         adb = _adb_path()
+        if not adb:
+            return "adb is not installed or not discoverable."
         try:
             p = subprocess.run([adb, *_device_arg(serial), "exec-out", "screencap", "-p"],
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20, check=False)
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               timeout=20, check=False)
             if p.returncode != 0:
-                return p.stderr.decode(errors="replace")
+                return p.stderr.decode(errors="replace") or "Android screenshot failed."
+            if not p.stdout:
+                return "Android screenshot returned no image data."
             dest.write_bytes(p.stdout)
             return f"Android screenshot saved: {dest}"
         except Exception as exc:
