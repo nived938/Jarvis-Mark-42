@@ -77,6 +77,9 @@ Windows runtime validation before being treated as fully verified:
 - Storage cleanup intelligence
 - Hardware Health Center
 - Android Companion
+- Full Android ADB control plane
+- Embedded scrcpy phone cast in the JARVIS center HUD
+- Direct mouse/keyboard phone control inside JARVIS
 - JARVIS reasoning tier and context-driven execution prompt
 
 The Environment Doctor, Storage Cleanup Intelligence, and Hardware Health Center
