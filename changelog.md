@@ -24,6 +24,15 @@ This branch consolidates the current desktop automation and reliability work.
 - Calendar manager
 - multi-monitor application screen manager
 
+
+### Added in the Mark 43 context/automation branch
+
+- Resource Manager for CPU/RAM/disk/GPU/VRAM/process inspection
+- Local Ollama model router with RAM-aware model selection
+- Local AI fallback for text-only one-shot Gemini helper calls
+- Named JARVIS voice profiles with Live-session reconnect
+- Notification intelligence with classification, priority, deduplication, digests, and quiet mode
+
 ### Reliability improvements
 
 - strict lifecycle command handling
