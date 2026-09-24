@@ -159,3 +159,16 @@ JSON example:
 }
 
 Keep the real key only in config/api_keys.json; never commit it to GitHub. The Maps HUD uses the same Maps JavaScript + libraries=places pattern as the provided URL and does not assume Routes, Street View, or other Google Maps services are enabled.
+
+
+## Google Maps key requirements
+
+The current Maps HUD uses the modern Places API (New) JavaScript interfaces:
+- Maps JavaScript API
+- Places API (New)
+- Places library
+- marker library for advanced map markers
+
+The key must be authorized for the APIs required by the HUD. Google recommends restricting the key to the Maps JavaScript API and Places API (New), with an appropriate application restriction for the client. Do not commit the key.
+
+A Google Maps Demo Key is intended for prototyping and has limited quota. The JARVIS HUD cannot increase or bypass Google's quota.
