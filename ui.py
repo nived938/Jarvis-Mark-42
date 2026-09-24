@@ -3936,6 +3936,10 @@ class MainWindow(QMainWindow):
     _geo_maps_locate_sig = pyqtSignal()
     _geo_maps_set_location_sig = pyqtSignal()
     _geo_maps_route_sig = pyqtSignal(str, str)
+    _countdown_start_sig = pyqtSignal(float, str)
+    _countdown_cancel_sig = pyqtSignal()
+    _stopwatch_start_sig = pyqtSignal(float)
+    _stopwatch_stop_sig = pyqtSignal()
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -4130,6 +4134,10 @@ class MainWindow(QMainWindow):
         self._geo_maps_locate_sig.connect(self._locate_geo_maps_on_qt_thread)
         self._geo_maps_set_location_sig.connect(self._set_geoapify_location_on_qt_thread)
         self._geo_maps_route_sig.connect(self._show_geoapify_route)
+        self._countdown_start_sig.connect(self._start_countdown_on_qt_thread)
+        self._countdown_cancel_sig.connect(self._cancel_countdown_on_qt_thread)
+        self._stopwatch_start_sig.connect(self._start_stopwatch_on_qt_thread)
+        self._stopwatch_stop_sig.connect(self._stop_stopwatch_on_qt_thread)
         self._cam_stop = threading.Event()
         self._cam_thread = None
 
@@ -6488,25 +6496,39 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    def start_countdown_timer(self, seconds: float, title: str = "TIMER") -> None:
-        """Thread-safe enough for local action callers; schedule onto Qt."""
+    def _start_countdown_on_qt_thread(self, seconds: float, title: str) -> None:
         try:
-            if threading.current_thread() is not threading.main_thread():
-                QTimer.singleShot(
-                    0,
-                    lambda s=float(seconds), t=str(title or "TIMER"): self._countdown_hud.start_countdown(s, t),
-                )
-                return
             self._countdown_hud.start_countdown(float(seconds), str(title or "TIMER"))
         except Exception as exc:
             self._log.append_log(f"ERR: Countdown start failed — {exc}")
 
+    def _cancel_countdown_on_qt_thread(self) -> None:
+        try:
+            self._countdown_hud.stop(hide=True)
+        except Exception:
+            pass
+
+    def _start_stopwatch_on_qt_thread(self, elapsed: float) -> None:
+        try:
+            self._countdown_hud.start_stopwatch(float(elapsed))
+        except Exception:
+            pass
+
+    def _stop_stopwatch_on_qt_thread(self) -> None:
+        try:
+            self._countdown_hud.stop(hide=True)
+        except Exception:
+            pass
+
+    def start_countdown_timer(self, seconds: float, title: str = "TIMER") -> None:
+        try:
+            self._countdown_start_sig.emit(float(seconds), str(title or "TIMER"))
+        except Exception:
+            pass
+
     def cancel_countdown_timer(self) -> None:
         try:
-            if threading.current_thread() is not threading.main_thread():
-                QTimer.singleShot(0, lambda: self._countdown_hud.stop(hide=True))
-                return
-            self._countdown_hud.stop(hide=True)
+            self._countdown_cancel_sig.emit()
         except Exception:
             pass
 
@@ -6518,22 +6540,13 @@ class MainWindow(QMainWindow):
 
     def start_stopwatch_hud(self, elapsed: float = 0.0) -> None:
         try:
-            if threading.current_thread() is not threading.main_thread():
-                QTimer.singleShot(
-                    0,
-                    lambda e=float(elapsed): self._countdown_hud.start_stopwatch(e),
-                )
-                return
-            self._countdown_hud.start_stopwatch(float(elapsed))
+            self._stopwatch_start_sig.emit(float(elapsed))
         except Exception:
             pass
 
     def stop_stopwatch_hud(self) -> None:
         try:
-            if threading.current_thread() is not threading.main_thread():
-                QTimer.singleShot(0, lambda: self._countdown_hud.stop(hide=True))
-                return
-            self._countdown_hud.stop(hide=True)
+            self._stopwatch_stop_sig.emit()
         except Exception:
             pass
 
