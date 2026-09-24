@@ -78,7 +78,7 @@ def _handler(parameters=None, player=None, **_):
     prompt = str(p.get("prompt", "")).strip()
     if not prompt:
         return "Provide a prompt for the local AI."
-    mode = str(p.get("mode", "balanced")).strip().lower()
+    mode = str(p.get("mode") or get_local_ai_mode()).strip().lower()
     image_path = str(p.get("image_path", "")).strip()
     model = str(p.get("model", "")).strip()
 
