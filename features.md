@@ -249,3 +249,8 @@ These should not be reintroduced accidentally while documenting or extending the
 - named-place searches biased to the saved location
 - `near me` searches constrained around the saved location
 - map search box updates the current map without reloading the page
+
+
+### Two-location road routing
+- Map searches such as “search in map for Lulu Mall” go directly to the Geoapify Maps HUD.
+- Road-distance phrases such as “what is the distance from Kasaragod to Kalanad by road” resolve both locations, calculate a Geoapify driving route, place markers at both endpoints, draw the road route between them, and fit the map to the complete route.
