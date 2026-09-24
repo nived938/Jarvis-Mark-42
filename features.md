@@ -254,3 +254,11 @@ These should not be reintroduced accidentally while documenting or extending the
 ### Two-location road routing
 - Map searches such as “search in map for Lulu Mall” go directly to the Geoapify Maps HUD.
 - Road-distance phrases such as “what is the distance from Kasaragod to Kalanad by road” resolve both locations, calculate a Geoapify driving route, place markers at both endpoints, draw the road route between them, and fit the map to the complete route.
+
+
+### Countdown timer HUD
+- JARVIS has a real non-blocking countdown timer action.
+- The timer is displayed in a small box at the top-left of the main HUD.
+- The display updates continuously and closes automatically when the countdown reaches zero.
+- Timer completion is announced through JARVIS without blocking the Live session.
+- The existing stopwatch can also use the same HUD box while it is running.
