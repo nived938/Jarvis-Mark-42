@@ -204,3 +204,29 @@ These should not be reintroduced accidentally while documenting or extending the
 - Local AI has an interactive center-HUD model picker with Up/Down navigation and Enter selection
 - The selected Local AI model is persisted locally
 - `close`, `close it`, `close that`, `close this`, `hide`, `dismiss`, `go back`, and related phrases close the active temporary center HUD
+## Crash Detective
+
+- automatic unhandled Python exception capture for the main process and threads
+- timestamped local JSON crash reports
+- traceback and runtime environment capture
+- heuristic likely-follow-up guidance for common Python failures
+- latest/list/status inspection through a discoverable action
+- Crash Detective reports displayed in the center HUD
+
+## Network Quality Monitor
+
+- active network-interface detection
+- repeated TCP latency probes
+- packet-loss measurement across probe attempts
+- DNS resolution timing
+- HTTPS reachability timing
+- quality classification
+- local history of recent checks
+- complete Network Quality report displayed in the center HUD
+
+## Visual UI object recognition
+
+- natural-language recognition of desktop UI elements
+- coordinate location of visible targets
+- visual click activation through the existing screen-vision backend
+- reuses the existing Gemini-powered screen element finder rather than creating a second vision stack
