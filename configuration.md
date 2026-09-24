@@ -149,26 +149,3 @@ Quiet mode suppresses ordinary/important notification interruptions for a chosen
 ```
 
 `local_ai_model` is the preferred installed Ollama model selected from the JARVIS HUD picker. `local_ai_mode` controls automatic routing when no explicit mode is supplied. Supported modes are `fast`, `balanced`, `smart`, and `vision`.
-## Google Maps + Places
-
-JARVIS can load the Google Maps JavaScript API and Places library using a local key:
-
-JSON example:
-{
-  "google_maps_api_key": "YOUR_LOCAL_KEY"
-}
-
-Keep the real key only in config/api_keys.json; never commit it to GitHub. The Maps HUD uses the same Maps JavaScript + libraries=places pattern as the provided URL and does not assume Routes, Street View, or other Google Maps services are enabled.
-
-
-## Google Maps key requirements
-
-The current Maps HUD uses the modern Places API (New) JavaScript interfaces:
-- Maps JavaScript API
-- Places API (New)
-- Places library
-- marker library for advanced map markers
-
-The key must be authorized for the APIs required by the HUD. Google recommends restricting the key to the Maps JavaScript API and Places API (New), with an appropriate application restriction for the client. Do not commit the key.
-
-A Google Maps Demo Key is intended for prototyping and has limited quota. The JARVIS HUD cannot increase or bypass Google's quota.
