@@ -592,7 +592,7 @@ TOOL = {
         "discovery, wireless connect/disconnect, live cast start/stop, direct mouse/keyboard "
         "control through the embedded scrcpy window, app listing/launch/stop/info/install/uninstall, "
         "navigation, touch/swipe/text/key input, URLs, settings, notifications, quick settings, "
-        "volume, brightness, current app, screenshots, battery/storage, and file push/pull."
+        "volume, brightness, current app, UI-hierarchy inspection, natural visible-control clicking, screenshots, battery/storage, and file push/pull."
     ),
     "parameters": {
         "type": "OBJECT",
