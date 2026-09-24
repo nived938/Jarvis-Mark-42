@@ -18,7 +18,7 @@ from pathlib import Path
 import psutil
 
 try:
-    from memory.config_manager import load_api_keys, get_local_ai_model
+    from memory.config_manager import load_api_keys, get_local_ai_model, get_local_ai_mode
 except Exception:
     load_api_keys = lambda: {}
 
@@ -119,7 +119,7 @@ def select_model(mode: str = "balanced", has_image: bool = False) -> str | None:
       smart    -> 9B first when enough RAM is free
       vision   -> llama3.2-vision when enough RAM is free
     """
-    mode = str(mode or "balanced").strip().lower()
+    mode = str(mode or get_local_ai_mode() or "balanced").strip().lower()
     installed = installed_models()
 
     preferred = get_local_ai_model()
