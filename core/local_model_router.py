@@ -21,6 +21,8 @@ try:
     from memory.config_manager import load_api_keys, get_local_ai_model, get_local_ai_mode
 except Exception:
     load_api_keys = lambda: {}
+    get_local_ai_model = lambda: ""
+    get_local_ai_mode = lambda: "balanced"
 
 _DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 _DISCOVERY_TTL = 20.0
