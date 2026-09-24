@@ -1337,6 +1337,23 @@ class JarvisLive:
         }:
             result = self._run_local_action("resource_manager", {"action": "analyze"})
             self.ui.show_content("RESOURCE • ANALYSIS", result)
+            # Local commands do not re-enter Gemini automatically. Give the
+            # user a concise spoken summary as well as the detailed HUD view.
+            try:
+                cpu_match = _re.search(r"CPU:\s*([\d.]+)%", result)
+                ram_match = _re.search(r"RAM:\s*[\d.]+\s*/\s*[\d.]+\s*GB\s*\(([\d.]+)%\)", result)
+                gpu_match = _re.search(r"GPU:\s*([\d.]+)%", result)
+                parts = []
+                if cpu_match:
+                    parts.append(f"CPU is {cpu_match.group(1)} percent")
+                if ram_match:
+                    parts.append(f"RAM is at {ram_match.group(1)} percent")
+                if gpu_match:
+                    parts.append(f"GPU is at {gpu_match.group(1)} percent")
+                spoken = "Sir, " + ", ".join(parts) + "." if parts else "Sir, your current resource usage is shown on the HUD."
+                self.speak(spoken)
+            except Exception:
+                self.speak("Sir, your current resource usage is shown on the HUD.")
             return True
 
         if low in {
@@ -1449,7 +1466,17 @@ class JarvisLive:
             "open local ai",
             "local ai picker",
         }:
-            self._run_local_action("local_ai_router", {"action": "show"})
+            # The picker is a UI capability, not a model-dependent action.
+            # Open it directly so it still works even when action discovery
+            # rejected local_ai_router because Ollama/core dependencies are
+            # unavailable.
+            try:
+                self.ui.show_local_ai_picker()
+                self.ui.write_log("SYS: Local AI picker opened.")
+                self.speak("Sir, the Local AI model picker is open on the HUD.")
+            except Exception as exc:
+                self.ui.write_log(f"ERR: Local AI HUD failed — {exc}")
+                self.speak("Sir, I couldn't open the Local AI picker.")
             return True
 
         if low in {
