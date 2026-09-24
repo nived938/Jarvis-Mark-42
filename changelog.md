@@ -55,3 +55,10 @@ This branch consolidates the current desktop automation and reliability work.
 ### Current direction
 
 The project is moving toward a more modular desktop-automation platform where `main.py` remains the Live-session orchestrator and new capabilities are added as discoverable actions.
+
+### Reliability and desktop intelligence additions
+
+- Crash Detective with persistent exception reports and HUD inspection
+- Network Quality Monitor with latency, packet loss, DNS, HTTPS, and local history
+- Visual UI object recognition action built on the existing screen-vision pipeline
+- local commands for crash reports, network checks, and visual UI locate/click operations
