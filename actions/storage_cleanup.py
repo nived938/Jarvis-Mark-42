@@ -112,6 +112,11 @@ def _handler(parameters, **_):
     if action in {"scan", "status", "preview"}:
         return scan_storage()
     if action == "clean":
+        if not bool(parameters.get("confirm", False)):
+            return (
+                "Cleanup not executed. This action requires confirm=true after the "
+                "user explicitly asked to remove old cache/temp data."
+            )
         return clean_storage(int(parameters.get("days", 3) or 3))
     return "Unknown storage_cleanup action."
 
@@ -128,6 +133,7 @@ TOOL = {
         "properties": {
             "action": {"type": "STRING", "description": "scan | preview | clean | status"},
             "days": {"type": "INTEGER", "description": "Only clean cache/temp files older than this many days, 1-30."},
+            "confirm": {"type": "BOOLEAN", "description": "Must be true only after the user explicitly asked to execute cleanup."},
         },
         "required": ["action"],
     },
