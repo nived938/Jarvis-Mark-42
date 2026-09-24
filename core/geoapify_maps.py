@@ -147,6 +147,29 @@ def _category_for_query(query: str) -> str | None:
             return category
     return None
 
+def current_ip_location() -> dict[str, Any]:
+    """Return approximate public-IP location for centering the JARVIS map."""
+    req = urllib.request.Request(
+        "https://ipapi.co/json/",
+        headers={"User-Agent": "JARVIS-Mark-43/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8.0) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if not isinstance(data, dict):
+            raise RuntimeError("Location service returned invalid data.")
+        lat = float(data["latitude"])
+        lon = float(data["longitude"])
+        return {
+            "lat": lat,
+            "lon": lon,
+            "city": str(data.get("city") or "").strip(),
+            "region": str(data.get("region") or "").strip(),
+            "country": str(data.get("country_name") or "").strip(),
+        }
+    except Exception as exc:
+        raise RuntimeError(f"Could not determine approximate location: {exc}") from exc
+
 def search(query: str, lat: float, lon: float) -> dict[str, Any]:
     text = str(query or "").strip()
     category = _category_for_query(text)
@@ -180,6 +203,25 @@ L.tileLayer('/tiles/carto/{z}/{x}/{y}.png',{maxZoom:19,attribution:'Powered by <
 const markers=L.layerGroup().addTo(map); let routeLayer=null;
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function showResults(p){markers.clearLayers();const rows=p.results||[];if(!rows.length){status.textContent='NO RESULTS';return;}const b=[];rows.forEach(x=>{const m=L.marker([x.lat,x.lon]).addTo(markers);m.bindPopup('<b>'+esc(x.name||'Location')+'</b><br>'+esc(x.formatted||''));b.push([x.lat,x.lon]);});map.fitBounds(b,{padding:[36,36],maxZoom:16});status.textContent=(p.kind==='places'?'PLACES':'SEARCH')+' • '+rows.length+' RESULT(S)';}
+async function locateUser(){
+  status.textContent='LOCATING…';
+  try{
+    const r=await fetch('/api/location');
+    const p=await r.json();
+    if(!r.ok) throw Error(p.error||'Location lookup failed');
+    markers.clearLayers();
+    const marker=L.circleMarker([p.lat,p.lon],{
+      radius:9,color:'#00d4ff',weight:3,fillColor:'#00d4ff',fillOpacity:.35
+    }).addTo(markers);
+    const place=[p.city,p.region,p.country].filter(Boolean).join(', ');
+    marker.bindPopup('<b>YOU ARE HERE</b><br>'+esc(place||'Approximate location'));
+    map.setView([p.lat,p.lon],14,{animate:true});
+    marker.openPopup();
+    status.textContent='YOUR LOCATION • APPROXIMATE';
+  }catch(e){
+    status.textContent='LOCATION ERROR: '+e.message;
+  }
+}
 async function searchMap(q){if(!q)return;status.textContent='SEARCHING…';const c=map.getCenter();try{const r=await fetch('/api/search?'+new URLSearchParams({q,lat:c.lat,lon:c.lng}));const p=await r.json();if(!r.ok)throw Error(p.error||'Search failed');showResults(p);}catch(e){status.textContent='ERROR: '+e.message;}}
 async function routeTo(q){status.textContent='FINDING DESTINATION…';try{const c=map.getCenter();const g=await fetch('/api/geocode?'+new URLSearchParams({text:q}));const gp=await g.json();if(!g.ok||!(gp.results||[]).length)throw Error('Destination not found');const d=gp.results[0];const r=await fetch('/api/route?'+new URLSearchParams({slat:c.lat,slon:c.lng,elat:d.lat,elon:d.lon,mode:'drive'}));const p=await r.json();if(!r.ok)throw Error(p.error||'Route failed');if(routeLayer)map.removeLayer(routeLayer);routeLayer=L.geoJSON(p,{style:{color:'#00d4ff',weight:5,opacity:.85}}).addTo(map);map.fitBounds(routeLayer.getBounds(),{padding:[30,30]});status.textContent='ROUTE • DRIVE';}catch(e){status.textContent='ROUTE ERROR: '+e.message;}}
 const initialQuery=new URLSearchParams(location.search).get('q')||'';if(initialQuery)searchMap(initialQuery);
@@ -204,6 +246,9 @@ class _Handler(BaseHTTPRequestHandler):
                 z,x,y_png=parts[2],parts[3],parts[4]; y=y_png[:-4]
                 data,ctype=_request_bytes("https://maps.geoapify.com/v1/tile/carto/%s/%s/%s.png?apiKey=%s"%(z,x,y,urllib.parse.quote(_api_key())))
                 self._send(200,data,ctype); return
+            if path=="/api/location":
+                self._json(200, current_ip_location())
+                return
             if path=="/api/geocode":
                 self._json(200,{"results":geocode((q.get("text") or [""])[0])}); return
             if path=="/api/search":
