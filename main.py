@@ -103,7 +103,9 @@ from actions.usb_device_intelligence import _handler as usb_device_action
 from actions.download_watcher import _handler as download_watcher_action
 from actions.context_action_bubble import _handler as context_action_handler
 from core.execution_trace import start_session as trace_start_session, tool_start as trace_tool_start, tool_end as trace_tool_end
-from core.no_progress import NoProgressGuard\nfrom core.voice_profiles import active_voice\nfrom actions.notification_intelligence import should_interrupt
+from core.no_progress import NoProgressGuard
+from core.voice_profiles import active_voice
+from actions.notification_intelligence import should_interrupt
 
 # How long the assistant stays awake with no user speech before it auto-sleeps
 # again (wake-word mode only).
@@ -1810,7 +1812,7 @@ class JarvisLive:
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=get_voice()
+                        voice_name=active_voice()
                     )
                 )
             ),
