@@ -3722,17 +3722,8 @@ class GeoapifyMapsHudView(QWidget):
         """Center the loaded map on the saved map location (or IP fallback)."""
         self._pending_locate = True
         if not self._map_ready:
-            if self._web is not None:
-                from core.geoapify_maps import map_url
-                self._web.setUrl(QUrl(map_url()))
             return
         self._pending_locate = False
-        if not _GEO_MAP_WEBENGINE or self._web is None:
-            self._set_status("WEBENGINE REQUIRED")
-            return
-        try:
-            self._web.page().runJavaScript("locateUser();")
-        except Exception as exc:
         if not _GEO_MAP_WEBENGINE or self._web is None:
             self._set_status("WEBENGINE REQUIRED")
             return
@@ -3753,9 +3744,6 @@ class GeoapifyMapsHudView(QWidget):
         """Enter click-to-save mode on the map."""
         self._pending_set_location = True
         if not self._map_ready:
-            if self._web is not None:
-                from core.geoapify_maps import map_url
-                self._web.setUrl(QUrl(map_url()))
             return
         self._pending_set_location = False
         try:
