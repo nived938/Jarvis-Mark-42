@@ -66,6 +66,23 @@ The following source changes are now present on `mark-43-context-automation`; th
 - Named JARVIS voice profiles
 - Notification intelligence and intelligent interruption gating
 
+## Newly implemented in the intelligence/android extension
+
+The following source changes are now present on this branch and require local
+Windows runtime validation before being treated as fully verified:
+
+- Automatic download organizer
+- Personal habit learning
+- Environment Doctor
+- Storage cleanup intelligence
+- Hardware Health Center
+- Android Companion
+- JARVIS reasoning tier and context-driven execution prompt
+
+The Environment Doctor, Storage Cleanup Intelligence, and Hardware Health Center
+are routed to the large center HUD. The other actions use the same auto-discovered
+action architecture and can also be rendered through the shared HUD result path.
+
 ## Immediate next priorities
 
 ### 1. Desktop window UX
