@@ -742,11 +742,15 @@ class _Handler(BaseHTTPRequestHandler):
             if path=="/api/autocomplete":
                 self._json(200,{"results":autocomplete((q.get("text") or [""])[0])}); return
             if path=="/api/place-details":
-                self._json(200,place_details(
-                    place_id=str((q.get("id") or [""])[0] or ""),
-                    lat=float((q.get("lat") or ["0"])[0]) if not (q.get("id") or [""]) [0] else None,
-                    lon=float((q.get("lon") or ["0"])[0]) if not (q.get("id") or [""]) [0] else None,
-                )); return
+                _place_id = str((q.get("id") or [""])[0] or "").strip()
+                if _place_id:
+                    self._json(200, place_details(place_id=_place_id))
+                else:
+                    self._json(200, place_details(
+                        lat=float((q.get("lat") or ["0"])[0]),
+                        lon=float((q.get("lon") or ["0"])[0]),
+                    ))
+                return
             if path=="/api/search":
                 self._json(200,search((q.get("q") or [""])[0],float((q.get("lat") or ["20"])[0]),float((q.get("lon") or ["78"])[0]))); return
             if path=="/api/route":
