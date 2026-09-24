@@ -122,3 +122,11 @@ The following source changes are now present on `mark-43-context-automation`; th
 ## Roadmap rule
 
 Do not add a feature to documentation as completed until it exists in source control and survives syntax/import validation.
+
+### Newly implemented on this branch
+
+- Crash Detective
+- Network Quality Monitor
+- Visual UI object recognition
+
+These source changes are present on the mark-43-context-automation branch. Crash and network results are designed for the center HUD and should receive local Windows runtime validation before being treated as fully verified.
