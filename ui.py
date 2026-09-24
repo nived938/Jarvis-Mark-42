@@ -1377,6 +1377,117 @@ class _CameraPreview(QWidget):
 
 
 
+class CountdownHud(QFrame):
+    """Small non-blocking countdown/stopwatch indicator anchored to the HUD."""
+    finished = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFixedWidth(190)
+        self.setStyleSheet(f"""
+            CountdownHud {{
+                background: rgba(0, 12, 18, 238);
+                border: 1px solid {C.PRI};
+                border-radius: 5px;
+            }}
+            QLabel#timerTitle {{
+                color: {C.PRI_DIM};
+                background: transparent;
+                font-family: "Courier New";
+                font-size: 8px;
+                font-weight: bold;
+            }}
+            QLabel#timerValue {{
+                color: {C.TEXT};
+                background: transparent;
+                font-family: "Courier New";
+                font-size: 20px;
+                font-weight: bold;
+            }}
+        """)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 7, 10, 8)
+        lay.setSpacing(1)
+
+        self._title = QLabel("TIMER")
+        self._title.setObjectName("timerTitle")
+        lay.addWidget(self._title)
+
+        self._value = QLabel("00:00")
+        self._value.setObjectName("timerValue")
+        self._value.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(self._value)
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(200)
+        self._timer.timeout.connect(self._tick)
+        self._deadline = 0.0
+        self._mode = "timer"
+        self._running = False
+        self.hide()
+
+    def _format(self, seconds: float) -> str:
+        total = max(0, int(seconds + 0.999))
+        hours, rem = divmod(total, 3600)
+        minutes, secs = divmod(rem, 60)
+        if hours:
+            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        return f"{minutes:02d}:{secs:02d}"
+
+    def start_countdown(self, seconds: float, title: str = "TIMER") -> None:
+        seconds = max(0.1, float(seconds))
+        self._mode = "timer"
+        self._title.setText(str(title or "TIMER").upper())
+        self._deadline = time.monotonic() + seconds
+        self._running = True
+        self._value.setText(self._format(seconds))
+        self.adjustSize()
+        self.move(12, 12)
+        self.show()
+        self.raise_()
+        self._timer.start()
+
+    def start_stopwatch(self, elapsed: float = 0.0) -> None:
+        self._mode = "stopwatch"
+        self._title.setText("STOPWATCH")
+        self._deadline = time.monotonic() - max(0.0, float(elapsed))
+        self._running = True
+        self.adjustSize()
+        self.move(12, 12)
+        self.show()
+        self.raise_()
+        self._timer.start()
+
+    def stop(self, hide: bool = True) -> None:
+        self._timer.stop()
+        self._running = False
+        if hide:
+            self.hide()
+
+    def remaining(self) -> float | None:
+        if not self._running:
+            return None
+        if self._mode == "timer":
+            return max(0.0, self._deadline - time.monotonic())
+        return max(0.0, time.monotonic() - self._deadline)
+
+    def _tick(self) -> None:
+        if not self._running:
+            return
+        value = self.remaining()
+        if value is None:
+            return
+        if self._mode == "timer":
+            if value <= 0.0:
+                self._value.setText("00:00")
+                self.stop(hide=True)
+                self.finished.emit("timer")
+                return
+        self._value.setText(self._format(value))
+
+
 class WeatherHudView(QWidget):
     """Full HUD weather experience: animated, temporary, and camera-like."""
 
@@ -3866,6 +3977,7 @@ class MainWindow(QMainWindow):
         self.on_push_to_talk   = None   # callable: (enable: bool) -> str scope
         self.ptt_hold          = None   # callable: (held: bool) -> None — windowed chord
         self.wake_get_state    = None   # callable: () -> dict {enabled, awake, ready}
+        self.on_timer_finished = None   # callable: () -> None when a countdown ends
         self._muted            = False
         self._current_file: str | None = None
         self._remote_overlay: RemoteKeyOverlay | None = None
@@ -3890,6 +4002,10 @@ class MainWindow(QMainWindow):
         # Center column: HUD + resizable content panel via QSplitter
         self.hud = HudCanvas(face_path, _display)
         self.hud.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        self._countdown_hud = CountdownHud(self.hud)
+        self._countdown_hud.finished.connect(self._on_countdown_finished)
+
         self._content_panel = self._build_content_panel()
         self._quiz_panel = self._build_quiz_panel()
 
@@ -4204,6 +4320,36 @@ class MainWindow(QMainWindow):
                 self._close_local_ai_hud()
             self._hud_cam_stack.setCurrentIndex(5)
             self._geo_maps_hud.open_map(query)
+        except Exception:
+            pass
+
+    def start_countdown_timer(self, seconds: float, title: str = "TIMER") -> None:
+        try:
+            self._win.start_countdown_timer(float(seconds), str(title or "TIMER"))
+        except Exception:
+            pass
+
+    def cancel_countdown_timer(self) -> None:
+        try:
+            self._win.cancel_countdown_timer()
+        except Exception:
+            pass
+
+    def countdown_timer_remaining(self) -> float | None:
+        try:
+            return self._win.countdown_timer_remaining()
+        except Exception:
+            return None
+
+    def start_stopwatch_hud(self, elapsed: float = 0.0) -> None:
+        try:
+            self._win.start_stopwatch_hud(float(elapsed))
+        except Exception:
+            pass
+
+    def stop_stopwatch_hud(self) -> None:
+        try:
+            self._win.stop_stopwatch_hud()
         except Exception:
             pass
 
@@ -4827,6 +4973,13 @@ class MainWindow(QMainWindow):
                 (cw.height() - oh) // 2,
                 ow, oh,
             )
+        # Countdown/timer indicator — fixed top-left of the HUD canvas.
+        if hasattr(self, "_countdown_hud"):
+            self._countdown_hud.adjustSize()
+            self._countdown_hud.move(12, 12)
+            if self._countdown_hud.isVisible():
+                self._countdown_hud.raise_()
+
         # Camera preview — bottom-right corner of the center/HUD area
         pw = _CameraPreview._W
         ph = self._cam_preview.height() or _CameraPreview._H
@@ -6322,6 +6475,68 @@ class MainWindow(QMainWindow):
         if voice_changed and self.on_voice_change:
             self.on_voice_change()
 
+    def _on_countdown_finished(self, kind: str) -> None:
+        try:
+            callback = self.on_timer_finished
+            if callable(callback):
+                threading.Thread(
+                    target=callback,
+                    args=(str(kind or "timer"),),
+                    daemon=True,
+                    name="jarvis-timer-finished",
+                ).start()
+        except Exception:
+            pass
+
+    def start_countdown_timer(self, seconds: float, title: str = "TIMER") -> None:
+        """Thread-safe enough for local action callers; schedule onto Qt."""
+        try:
+            if threading.current_thread() is not threading.main_thread():
+                QTimer.singleShot(
+                    0,
+                    lambda s=float(seconds), t=str(title or "TIMER"): self._countdown_hud.start_countdown(s, t),
+                )
+                return
+            self._countdown_hud.start_countdown(float(seconds), str(title or "TIMER"))
+        except Exception as exc:
+            self._log.append_log(f"ERR: Countdown start failed — {exc}")
+
+    def cancel_countdown_timer(self) -> None:
+        try:
+            if threading.current_thread() is not threading.main_thread():
+                QTimer.singleShot(0, lambda: self._countdown_hud.stop(hide=True))
+                return
+            self._countdown_hud.stop(hide=True)
+        except Exception:
+            pass
+
+    def countdown_timer_remaining(self) -> float | None:
+        try:
+            return self._countdown_hud.remaining()
+        except Exception:
+            return None
+
+    def start_stopwatch_hud(self, elapsed: float = 0.0) -> None:
+        try:
+            if threading.current_thread() is not threading.main_thread():
+                QTimer.singleShot(
+                    0,
+                    lambda e=float(elapsed): self._countdown_hud.start_stopwatch(e),
+                )
+                return
+            self._countdown_hud.start_stopwatch(float(elapsed))
+        except Exception:
+            pass
+
+    def stop_stopwatch_hud(self) -> None:
+        try:
+            if threading.current_thread() is not threading.main_thread():
+                QTimer.singleShot(0, lambda: self._countdown_hud.stop(hide=True))
+                return
+            self._countdown_hud.stop(hide=True)
+        except Exception:
+            pass
+
     def _centre_overlay(self, ov) -> None:
         """Place a floating overlay in the middle of the HUD and show it."""
         cw = self.centralWidget()
@@ -6672,6 +6887,14 @@ class JarvisUI:
     @ptt_hold.setter
     def ptt_hold(self, cb):
         self._win.ptt_hold = cb
+
+    @property
+    def on_timer_finished(self):
+        return self._win.on_timer_finished
+
+    @on_timer_finished.setter
+    def on_timer_finished(self, cb):
+        self._win.on_timer_finished = cb
 
     @property
     def on_push_to_talk(self):
