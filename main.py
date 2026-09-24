@@ -617,6 +617,108 @@ TOOL_DECLARATIONS = [
     },
 ]
 
+_HUD_RESULT_TOOLS = {
+    "gmail_manager",
+    "calender_manager",
+    "send_message",
+    "code_helper",
+    "document_scanner",
+    "screen_ocr",
+    "scan_visual_code",
+    "clipboard_manager",
+}
+
+
+def _code_for_hud(args: dict, result: str) -> str:
+    """Find the actual source code associated with a code-helper operation."""
+    action = str(args.get("action", "auto") or "auto").lower().strip()
+    inline = str(args.get("code", "") or "").strip()
+    if inline:
+        return inline
+
+    path_text = str(args.get("file_path", "") or "").strip()
+    if not path_text:
+        # code_helper reports its saved destination in write/build/edit responses.
+        match = re.search(r"Saved to:\s*(.+)", str(result or ""))
+        if match:
+            path_text = match.group(1).splitlines()[0].strip()
+
+    if path_text:
+        try:
+            path = Path(path_text.strip('"'))
+            if path.exists() and path.is_file():
+                return path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+    # For write/build actions the generated file is normally named in the result.
+    if action in {"write", "build"}:
+        match = re.search(r"Desktop[^\r\n]+", str(result or ""))
+        if match:
+            try:
+                path = Path(match.group(0).strip())
+                if path.exists() and path.is_file():
+                    return path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+    return ""
+
+
+def _hud_result_payload(name: str, args: dict, result: str) -> tuple[str, str, bool] | None:
+    """Return (title, body, auto_copy) for results that belong in the HUD."""
+    if name not in _HUD_RESULT_TOOLS:
+        return None
+
+    text = str(result or "").strip()
+    if not text:
+        return None
+
+    if name == "gmail_manager":
+        action = str(args.get("action", "latest") or "latest").upper()
+        return f"GMAIL • {action}", text, False
+
+    if name == "calender_manager":
+        action = str(args.get("action", "upcoming") or "upcoming").upper()
+        return f"CALENDAR • {action}", text, False
+
+    if name == "send_message":
+        receiver = str(args.get("receiver", "") or "").strip()
+        platform = str(args.get("platform", "") or "MESSAGE").strip()
+        title = f"{platform.upper()} MESSAGE"
+        if receiver:
+            title += f" • {receiver[:24]}"
+        return title, text, False
+
+    if name == "code_helper":
+        code = _code_for_hud(args, text)
+        if code:
+            action = str(args.get("action", "code") or "code").upper()
+            body = (
+                "===== CODE =====\n"
+                + code
+                + "\n\n===== JARVIS RESULT =====\n"
+                + text
+            )
+            auto_copy = action in {"WRITE", "EDIT", "BUILD", "OPTIMIZE", "AUTO"}
+            return "CODE • " + action, body, auto_copy
+        return "CODE • RESULT", text, False
+
+    if name == "document_scanner":
+        return "DOCUMENT SCAN", text, False
+
+    if name == "screen_ocr":
+        return "SCREEN OCR", text, False
+
+    if name == "scan_visual_code":
+        return "SCANNED CODES", text, False
+
+    if name == "clipboard_manager":
+        return "CLIPBOARD", text, False
+
+    return None
+
+
 class _ReconnectSignal(Exception):
     """Raised inside the session TaskGroup to force a clean, voluntary reconnect
     (e.g. the user picked a new voice — the voice is fixed at connect time, so
@@ -1187,6 +1289,14 @@ class JarvisLive:
             else:
                 self.ui.start_camera_stream()
                 self.ui.write_log("SYS: Camera HUD opened and will stay open until you say close camera.")
+            return True
+
+        if self.ui.is_content_open() and low in (
+            "close", "close it", "close that", "hide", "hide it", "hide that",
+            "dismiss", "dismiss it", "close panel", "close result", "close results",
+        ):
+            self.ui.stop_content()
+            self.ui.write_log("SYS: HUD result viewer closed.")
             return True
 
         # Windows app/window controls: keep common screen-management commands
@@ -2026,6 +2136,27 @@ class JarvisLive:
                         "response": None, "session_memory": None}
                 r = await loop.run_in_executor(None, lambda: self._action_registry.run(name, args, _ctx))
                 result = r or "Done."
+
+                # Important results are mirrored to the persistent HUD viewer.
+                # Code can also be copied automatically when JARVIS generates or edits it.
+                try:
+                    _hud = _hud_result_payload(name, args, str(result))
+                    if _hud is not None:
+                        _hud_title, _hud_body, _auto_copy = _hud
+                        self.ui.show_content(_hud_title, _hud_body)
+                        if _auto_copy:
+                            try:
+                                import pyperclip
+                                _code_only = _hud_body.split("===== CODE =====", 1)[-1]
+                                _code_only = _code_only.split("===== JARVIS RESULT =====", 1)[0].strip()
+                                if _code_only:
+                                    pyperclip.copy(_code_only)
+                                    self.ui.write_log("SYS: Code copied to clipboard.")
+                            except Exception as _copy_exc:
+                                self.ui.write_log(f"SYS: Could not copy code to clipboard: {_copy_exc}")
+                except Exception as _hud_exc:
+                    self.ui.write_log(f"SYS: HUD result display skipped: {_hud_exc}")
+
                 if name == "file_controller" and bool(args.get("preview", False)):
                     self.ui.show_content("FILE OPERATION PREVIEW", str(result))
                 # web_search: mirror results to the on-screen content panel
