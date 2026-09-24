@@ -3647,6 +3647,9 @@ class GeoapifyMapsHudView(QWidget):
         root.addLayout(header)
 
         self._web = None
+        self._map_ready = False
+        self._pending_locate = False
+        self._pending_set_location = False
         if _GEO_MAP_WEBENGINE:
             self._web = QWebEngineView(self)
             self._web.setStyleSheet(f"border: 1px solid {C.BORDER_B};")
@@ -3683,6 +3686,7 @@ class GeoapifyMapsHudView(QWidget):
     def open_map(self, query: str = "") -> None:
         query = str(query or "").strip()
         self._search.setText(query)
+        self._map_ready = False
         if not _GEO_MAP_WEBENGINE or self._web is None:
             self._set_status("WEBENGINE REQUIRED")
             return
@@ -3705,16 +3709,37 @@ class GeoapifyMapsHudView(QWidget):
         query = self._search.text().strip()
         if not query:
             return
-        self.open_map(query)
+        if self._map_ready and self._web is not None:
+            self._set_status("SEARCHING")
+            import json as _json
+            self._web.page().runJavaScript(
+                f"searchMap({_json.dumps(query, ensure_ascii=False)});"
+            )
+        else:
+            self.open_map(query)
 
     def locate_user(self) -> None:
-        """Center the loaded map on JARVIS's approximate current location."""
+        """Center the loaded map on the saved map location (or IP fallback)."""
+        self._pending_locate = True
+        if not self._map_ready:
+            if self._web is not None:
+                from core.geoapify_maps import map_url
+                self._web.setUrl(QUrl(map_url()))
+            return
+        self._pending_locate = False
         if not _GEO_MAP_WEBENGINE or self._web is None:
             self._set_status("WEBENGINE REQUIRED")
             return
         try:
             self._web.page().runJavaScript("locateUser();")
         except Exception as exc:
+        if not _GEO_MAP_WEBENGINE or self._web is None:
+            self._set_status("WEBENGINE REQUIRED")
+            return
+        try:
+            self._web.page().runJavaScript("locateUser();")
+        except Exception as exc:
+            self._pending_locate = False
             self._set_status("LOCATION ERROR")
             self._web.setHtml(
                 "<html><body style='background:#00060a;color:#8ffcff;"
@@ -3724,8 +3749,31 @@ class GeoapifyMapsHudView(QWidget):
                 "</body></html>"
             )
 
+    def set_location_mode(self) -> None:
+        """Enter click-to-save mode on the map."""
+        self._pending_set_location = True
+        if not self._map_ready:
+            if self._web is not None:
+                from core.geoapify_maps import map_url
+                self._web.setUrl(QUrl(map_url()))
+            return
+        self._pending_set_location = False
+        try:
+            self._web.page().runJavaScript("enableSetLocation();")
+            self._set_status("CLICK MAP TO SET LOCATION")
+        except Exception as exc:
+            self._set_status("LOCATION ERROR")
+            self._pending_set_location = False
+
     def _on_loaded(self, ok: bool) -> None:
+        self._map_ready = bool(ok)
         self._set_status("ONLINE" if ok else "LOAD ERROR")
+        if not ok or self._web is None:
+            return
+        if self._pending_set_location:
+            QTimer.singleShot(250, self.set_location_mode)
+        elif self._pending_locate:
+            QTimer.singleShot(250, self.locate_user)
 
     def close_view(self) -> None:
         self.closed.emit()
@@ -4146,6 +4194,15 @@ class MainWindow(QMainWindow):
             return self._hud_cam_stack.currentIndex() == 5
         except Exception:
             return False
+
+    def set_geoapify_location(self) -> None:
+        """Open the map if needed and enter click-to-set-location mode."""
+        try:
+            if self._hud_cam_stack.currentIndex() != 5:
+                self._show_geo_maps("")
+            self._geo_maps_hud.set_location_mode()
+        except Exception:
+            pass
 
     def _close_geo_maps_hud(self) -> None:
         try:
@@ -6671,6 +6728,13 @@ class JarvisUI:
             return bool(self._win.is_geo_maps_hud_open())
         except Exception:
             return False
+
+    def set_geoapify_location(self) -> None:
+        """Thread-safe: enter click-to-set map location mode."""
+        try:
+            self._win.set_geoapify_location()
+        except Exception:
+            pass
 
     def locate_geoapify_maps(self) -> None:
         """Thread-safe: center the Geoapify map on approximate current location."""
