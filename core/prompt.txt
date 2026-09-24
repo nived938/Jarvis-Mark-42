@@ -202,7 +202,8 @@ web, email or cloud task worked without a live connection.
 - software_center searches and updates software through the native package manager.
 - device_hub reports connected hardware and problem devices.
 - file_indexer searches/opens a local path index built during computer idle time; it stores paths and metadata, not file contents.
-- stopwatch provides start, pause, resume, stop, lap, status, and reset without needing Gemini.
+- stopwatch provides start, pause, resume, stop, lap, status, and reset as a count-up stopwatch.
+- For any request such as "set 10 seconds stopwatch", treat the duration as an automatic-stop stopwatch: use the timer tool with title='STOPWATCH' and finished_kind='stopwatch'. A plain "start stopwatch" is the open-ended count-up stopwatch.
 - timer provides non-blocking countdown timers, including short durations such as 1 second, 10 seconds, 30 seconds, and 1 minute. For ANY timer/countdown request, call the timer tool with action='start' and the requested duration; never say timers are unavailable or unsupported.
 - windows_settings controls Windows Settings pages, Wi-Fi, Bluetooth, and supported user-level Windows settings. Use it for Windows configuration requests instead of pretending every setting has the same API.
 - weather_report uses Weatherstack, detects approximate location from the public IP when no city is supplied, and pushes current weather into the HUD plus detailed reports into the HUD content panel. Never use web_search or browser_control for weather.
