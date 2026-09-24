@@ -274,3 +274,43 @@ After `set my location`, JARVIS enters click mode. Click the map at your actual 
 
 ### Timer and camera behavior
 Countdown timers are shown in the top-left HUD and disappear automatically when they reach zero. “open camera” opens the JARVIS camera HUD; “open camera app” explicitly targets the Windows camera application.
+
+## Android Command Center
+
+With Android debugging enabled, JARVIS can operate the connected phone through
+ADB and can place the live scrcpy mirror directly inside the center HUD.
+
+Examples:
+
+\`\`\`text
+show my phone
+cast my phone to the HUD
+open my phone in JARVIS
+close phone cast
+go home on my phone
+press back on my phone
+show recent apps on my phone
+wake my phone
+open Wi-Fi settings on my phone
+open notifications on my phone
+open quick settings on my phone
+launch YouTube on my phone
+stop YouTube on my phone
+type hello world on my phone
+tap 420 860 on my phone
+swipe up on my phone
+turn the phone volume up
+set my phone brightness to 120
+what app is open on my phone
+send this file to my phone
+get this file from my phone
+take a screenshot of my phone
+\`\`\`
+
+When the Android cast is open, the phone screen inside the HUD is directly
+interactive. Mouse clicks, drags, and keyboard input go to the embedded scrcpy
+surface, while spoken commands are translated into ADB actions.
+
+The Android companion does not require a companion Android app. scrcpy runs on
+the computer and the mirror is hosted inside JARVIS.
+
