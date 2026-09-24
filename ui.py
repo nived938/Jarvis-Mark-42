@@ -68,10 +68,10 @@ def _read_full_config() -> dict:
 
 # Single source of truth for the release name — the window title, the header
 # badge and the readme must never disagree again.
-APP_VERSION  = "JARVIS MARK 42"
+APP_VERSION  = "JARVIS MARK 45"
 APP_PROTOCOL = APP_VERSION.split()[-1]
 
-_DEFAULT_W, _DEFAULT_H = 980, 700
+_DEFAULT_W, _DEFAULT_H = 1920, 1080
 _MIN_W,     _MIN_H     = 820, 580
 _LEFT_W  = 148
 _RIGHT_W = 340
