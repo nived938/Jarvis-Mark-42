@@ -198,10 +198,10 @@ def generate(
 
     started = time.monotonic()
     data = _request("/api/chat", payload=payload, timeout=max(5.0, float(timeout)))
-    answer = (
-        (((data.get("message") or {}).get("content")) if isinstance(data, dict) else None)
-        or data.get("response", "") if isinstance(data, dict) else ""
-    )
+    if not isinstance(data, dict):
+        raise RuntimeError("Ollama returned a non-JSON object")
+    message = data.get("message")
+    answer = (message.get("content") if isinstance(message, dict) else None) or data.get("response", "")
     answer = str(answer or "").strip()
     if not answer:
         raise RuntimeError(f"Ollama returned an empty response from {picked}")
