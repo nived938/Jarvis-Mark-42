@@ -62,7 +62,7 @@ def stopwatch(parameters=None, **_) -> str:
             _save(data)
             return "Stopwatch started."
 
-        if action in {"pause", "stop"}:
+        if action in {"pause", "stop", "close"}:
             if not data.get("running"):
                 current = _elapsed(data)
                 return f"Stopwatch is not running. Elapsed time: {_fmt(current)}."
@@ -71,7 +71,14 @@ def stopwatch(parameters=None, **_) -> str:
             data["running"] = False
             data.pop("started", None)
             _save(data)
-            return f"Stopwatch {'paused' if action == 'pause' else 'stopped'} at {_fmt(current)}."
+            if action == "pause":
+                message = "paused"
+            elif action == "close":
+                message = "closed"
+            else:
+                message = "stopped"
+            
+            return f"Stopwatch {message} at {_fmt(current)}."
 
         if action == "resume":
             if data.get("running"):
@@ -138,7 +145,7 @@ TOOL = {
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": "start | pause | resume | stop | lap | laps | status | reset",
+                "description": "start | pause | resume | stop | close | lap | laps | status | reset",
             }
         },
         "required": ["action"],
