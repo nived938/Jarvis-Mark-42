@@ -4669,6 +4669,10 @@ class MainWindow(QMainWindow):
         self.hud.glance(0.0, -0.85, hold=1.3)
         self._content_title_lbl.setText(title.upper()[:48])
         self._content_ts_lbl.setText(_time.strftime("%H:%M:%S"))
+        if str(title or "").upper().startswith("CODE"):
+            self._content_display.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        else:
+            self._content_display.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self._content_display.setPlainText(text)
         self._content_display.moveCursor(
             self._content_display.textCursor().MoveOperation.Start
