@@ -401,18 +401,18 @@ def search(query: str, lat: float, lon: float) -> dict[str, Any]:
     }
 
 def _html() -> str:
-    return """<!doctype html>
+    html = """<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>JARVIS Geoapify Map</title>
-<link rel="stylesheet" href="%s">
+<link rel="stylesheet" href="__LEAFLET_CSS__">
 <style>
-html,body,#map{width:100%%;height:100%%;margin:0;background:#061018}
+html,body,#map{width:100%;height:100%;margin:0;background:#061018}
 .leaflet-control-attribution{font-size:10px}
 .leaflet-popup-content-wrapper,.leaflet-popup-tip{background:#061018;color:#d8f8ff}
 #status{position:fixed;left:12px;top:12px;z-index:9999;padding:7px 10px;border:1px solid #12617a;background:rgba(1,10,16,.9);color:#8ffcff;font:11px Consolas,monospace;border-radius:5px}
 </style></head><body>
 <div id="map"></div><div id="status">GEOAPIFY MAP READY</div>
-<script src="%s"></script><script>
+<script src="__LEAFLET_JS__"></script><script>
 const map=L.map('map').setView([20,78],5);
 L.tileLayer('/tiles/carto/{z}/{x}/{y}.png',{maxZoom:19,attribution:'Powered by <a href="https://www.geoapify.com/" target="_blank">Geoapify</a> | © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>'}).addTo(map);
 const markers=L.layerGroup().addTo(map);
@@ -510,7 +510,7 @@ function routeSummary(distanceM,timeS){
   const km=Number(distanceM||0)/1000;
   const min=Math.max(0,Number(timeS||0))/60;
   const d=km>=1?km.toFixed(1)+' km':Math.round(Number(distanceM||0))+' m';
-  const t=min>=60?Math.floor(min/60)+' h '+Math.round(min%%60)+' min':Math.round(min)+' min';
+  const t=min>=60?Math.floor(min/60)+' h '+Math.round(min%60)+' min':Math.round(min)+' min';
   return d+' • '+t;
 }
 async function routeTo(q){status.textContent='FINDING DESTINATION…';try{const c=map.getCenter();const g=await fetch('/api/geocode?'+new URLSearchParams({text:q}));const gp=await g.json();if(!g.ok||!(gp.results||[]).length)throw Error('Destination not found');const d=gp.results[0];const r=await fetch('/api/route?'+new URLSearchParams({slat:c.lat,slon:c.lng,elat:d.lat,elon:d.lon,mode:'drive'}));const p=await r.json();if(!r.ok)throw Error(p.error||'Route failed');if(routeLayer)map.removeLayer(routeLayer);routeLayer=L.geoJSON(p,{style:{color:'#00d4ff',weight:5,opacity:.85}}).addTo(map);map.fitBounds(routeLayer.getBounds(),{padding:[30,30]});status.textContent='ROUTE • DRIVE';}catch(e){status.textContent='ROUTE ERROR: '+e.message;}}
@@ -552,7 +552,8 @@ async function routeBetween(fromText,toText){
 loadSavedLocation();
 const initialQuery=new URLSearchParams(location.search).get('q')||'';
 if(initialQuery)searchMap(initialQuery);
-</script></body></html>""" % (_LEAFLET_CSS, _LEAFLET_JS)
+</script></body></html>"""
+    return html.replace("__LEAFLET_CSS__", _LEAFLET_CSS).replace("__LEAFLET_JS__", _LEAFLET_JS)
 
 class _Handler(BaseHTTPRequestHandler):
     server_version = "JARVISGeoapify/1.0"
