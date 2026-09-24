@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import xml.etree.ElementTree as ET
 import subprocess
 import time
 from pathlib import Path
@@ -139,6 +140,70 @@ def _keycode(value: str) -> str:
             "RECENTS, POWER, WAKE, VOLUME_UP, VOLUME_DOWN, ENTER, or a numeric keycode."
         )
     return code
+
+
+
+def _ui_xml(serial: str) -> str:
+    """Dump the visible Android UI hierarchy and return XML text."""
+    dump = _run([
+        *_device_arg(serial), "shell", "uiautomator", "dump", "/sdcard/jarvis_window.xml"
+    ], timeout=20)
+    if not dump[0]:
+        return ""
+    adb = _adb_path()
+    if not adb:
+        return ""
+    try:
+        p = subprocess.run(
+            [adb, *_device_arg(serial), "exec-out", "cat", "/sdcard/jarvis_window.xml"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=20,
+            check=False,
+        )
+        return p.stdout.decode("utf-8", errors="replace") if p.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _ui_nodes(serial: str) -> list[dict]:
+    xml_text = _ui_xml(serial)
+    if not xml_text.strip():
+        return []
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        return []
+
+    nodes = []
+    for node in root.iter("node"):
+        bounds = str(node.attrib.get("bounds", ""))
+        text = str(node.attrib.get("text", ""))
+        desc = str(node.attrib.get("content-desc", ""))
+        resource = str(node.attrib.get("resource-id", ""))
+        cls = str(node.attrib.get("class", ""))
+        clickable = str(node.attrib.get("clickable", "")).lower() == "true"
+        enabled = str(node.attrib.get("enabled", "true")).lower() == "true"
+        if not (text or desc or resource or bounds):
+            continue
+        nodes.append({
+            "text": text,
+            "content_desc": desc,
+            "resource_id": resource,
+            "class": cls,
+            "clickable": clickable,
+            "enabled": enabled,
+            "bounds": bounds,
+        })
+    return nodes
+
+
+def _bounds_center(bounds: str) -> tuple[int, int] | None:
+    m = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", bounds.strip())
+    if not m:
+        return None
+    x1, y1, x2, y2 = map(int, m.groups())
+    return ((x1 + x2) // 2, (y1 + y2) // 2)
 
 
 def _current_activity(serial: str) -> str:
@@ -440,6 +505,47 @@ def _handler(parameters, player=None, **_):
         )
         return out or ("File copied from Android." if ok else "ADB pull failed.")
 
+    if action == "ui_tree":
+        nodes = _ui_nodes(serial)
+        if not nodes:
+            return "Android UI hierarchy is unavailable. Make sure the device is connected and unlocked."
+        lines = ["ANDROID UI TREE"]
+        for index, node in enumerate(nodes[:220], start=1):
+            label = node["text"] or node["content_desc"] or node["resource_id"] or "<unnamed>"
+            flags = []
+            if node["clickable"]:
+                flags.append("clickable")
+            if node["enabled"]:
+                flags.append("enabled")
+            suffix = f" [{', '.join(flags)}]" if flags else ""
+            lines.append(
+                f"{index}. {label} | {node['class']} | {node['bounds']}{suffix}"
+            )
+        if len(nodes) > 220:
+            lines.append(f"... {len(nodes) - 220} more nodes omitted.")
+        return "\n".join(lines)
+
+    if action == "ui_click":
+        target = str(parameters.get("target", "") or "").strip().casefold()
+        if not target:
+            return "Provide the visible phone control text, content description, or resource ID to click."
+        nodes = _ui_nodes(serial)
+        for node in nodes:
+            haystack = " | ".join([
+                node["text"], node["content_desc"], node["resource_id"]
+            ]).casefold()
+            if target in haystack and node["enabled"]:
+                center = _bounds_center(node["bounds"])
+                if center is None:
+                    continue
+                ok, out = _run([
+                    *_device_arg(serial), "shell", "input", "tap",
+                    str(center[0]), str(center[1])
+                ])
+                label = node["text"] or node["content_desc"] or node["resource_id"]
+                return out or (f"Clicked '{label}'." if ok else f"Could not click '{label}'.")
+        return f"Could not find a visible Android control matching '{target}'."
+
     # ---- screenshots / diagnostics -----------------------------------------
     if action == "screenshot":
         SCREEN_DIR.mkdir(parents=True, exist_ok=True)
@@ -497,7 +603,7 @@ TOOL = {
                     "status | connect | disconnect | cast | cast_start | cast_stop | cast_status | "
                     "apps | launch | force_stop | app_info | install | uninstall | key | home | back | "
                     "recents | power | wake | tap | swipe | type | open_url | current_app | open_settings | "
-                    "notifications | quick_settings | volume | brightness | storage | push | pull | screenshot"
+                    "notifications | quick_settings | volume | brightness | storage | push | pull | ui_tree | ui_click | screenshot"
                 )
             },
             "serial": {"type": "STRING", "description": "Optional adb serial or IP:port"},
@@ -519,6 +625,7 @@ TOOL = {
             "direction": {"type": "STRING", "description": "up | down | mute"},
             "steps": {"type": "INTEGER", "description": "Number of volume key presses, 1-15"},
             "value": {"type": "INTEGER", "description": "Screen brightness 0-255"},
+            "target": {"type": "STRING", "description": "Visible Android control text, content-description, or resource ID for ui_click"},
             "name": {"type": "STRING", "description": "Android screenshot filename"},
             "audio": {"type": "BOOLEAN", "description": "When starting the HUD cast, also forward Android audio through scrcpy"},
         },
