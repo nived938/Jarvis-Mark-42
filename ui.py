@@ -3265,6 +3265,7 @@ class MainWindow(QMainWindow):
     _log_sig        = pyqtSignal(str)
     _state_sig      = pyqtSignal(str)
     _content_sig    = pyqtSignal(str, str)   # (title, text) — thread-safe content display
+    _content_close_sig = pyqtSignal()         # close result panel from any thread
     _weather_sig     = pyqtSignal(object)     # full weather HUD payload
     _weather_close_sig = pyqtSignal()          # close weather HUD from any thread
     _privacy_sig      = pyqtSignal(bool)       # privacy shield state
@@ -3434,6 +3435,7 @@ class MainWindow(QMainWindow):
         self._log_sig.connect(self._log.append_log)
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
+        self._content_close_sig.connect(self._close_content)
         self._weather_sig.connect(self._show_weather)
         self._weather_close_sig.connect(self._close_weather_now)
         self._privacy_sig.connect(self._apply_privacy_shield)
@@ -4593,8 +4595,22 @@ class MainWindow(QMainWindow):
         self._content_ts_lbl.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
         hdr.addWidget(self._content_ts_lbl)
 
-        dismiss = QPushButton("DISMISS  ✕")
-        dismiss.setFont(QFont("Courier New", 7))
+        copy_btn = QPushButton("COPY")
+        copy_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        copy_btn.setFixedHeight(18)
+        copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.TEXT_DIM};
+                border: 1px solid {C.BORDER}; border-radius: 2px; padding: 0 5px;
+            }}
+            QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
+        """)
+        copy_btn.clicked.connect(self._copy_content)
+        hdr.addWidget(copy_btn)
+
+        dismiss = QPushButton("CLOSE  ✕")
+        dismiss.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
         dismiss.setFixedHeight(18)
         dismiss.setCursor(Qt.CursorShape.PointingHandCursor)
         dismiss.setStyleSheet(f"""
@@ -4604,7 +4620,7 @@ class MainWindow(QMainWindow):
             }}
             QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
         """)
-        dismiss.clicked.connect(w.hide)
+        dismiss.clicked.connect(self._close_content)
         hdr.addWidget(dismiss)
         lay.addLayout(hdr)
 
@@ -4615,6 +4631,8 @@ class MainWindow(QMainWindow):
         # ── text display ──────────────────────────────────────────────────────
         self._content_display = QTextEdit()
         self._content_display.setReadOnly(True)
+        self._content_display.setAcceptRichText(False)
+        self._content_display.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         self._content_display.setFont(QFont("Courier New", 8))
         self._content_display.setMinimumHeight(60)
         self._content_display.setSizePolicy(
@@ -4659,7 +4677,23 @@ class MainWindow(QMainWindow):
         self._content_panel.show()
         if first_show:
             total = self._center_split.height()
-            self._center_split.setSizes([max(total - 220, 120), 220])
+            self._center_split.setSizes([max(total - 340, 120), 340])
+
+    def _copy_content(self) -> None:
+        try:
+            QApplication.clipboard().setText(self._content_display.toPlainText())
+            self._content_ts_lbl.setText("COPIED")
+            QTimer.singleShot(1400, lambda: self._content_ts_lbl.setText(""))
+        except Exception:
+            pass
+
+    def _close_content(self) -> None:
+        self._content_panel.hide()
+        try:
+            total = self._center_split.height()
+            self._center_split.setSizes([total, 0])
+        except Exception:
+            pass
 
     # ── document review ──────────────────────────────────────────────────────
     # Rendered as rich text into the content panel that already exists, rather
@@ -5896,8 +5930,21 @@ class JarvisUI:
             time.sleep(0.1)
 
     def show_content(self, title: str, text: str):
-        """Thread-safe: display content in the panel below the HUD."""
-        self._win._content_sig.emit(title[:48], text[:4000])
+        """Thread-safe: display persistent results in the HUD content viewer."""
+        self._win._content_sig.emit(title[:48], text[:120000])
+
+    def is_content_open(self) -> bool:
+        try:
+            return bool(self._win._content_panel.isVisible())
+        except Exception:
+            return False
+
+    def stop_content(self) -> None:
+        """Thread-safe: close the persistent HUD result viewer."""
+        try:
+            self._win._content_close_sig.emit()
+        except Exception:
+            pass
 
     def send_text_command(self, text: str) -> None:
         """Thread-safe entry point used by context shortcuts."""
