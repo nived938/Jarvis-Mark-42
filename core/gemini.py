@@ -43,9 +43,7 @@
     else:
         print("[Gemini] no Gemini API key is configured; trying local AI fallback")
 
-    # Do not silently turn an image-bearing request into a text-only request.
-    plain_parts = contents if isinstance(contents, (list, tuple)) else [contents]
-    local_text_parts = []
+    # Grounded search requires REST grounding metadata. Never replace it with a local answer.\n    if tier == SEARCH:\n        return None\n\n    # Do not silently turn an image-bearing request into a text-only request.\n    plain_parts = contents if isinstance(contents, (list, tuple)) else [contents]\n    local_text_parts = []
     has_binary = False
     for item in plain_parts:
         if isinstance(item, str):
