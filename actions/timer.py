@@ -88,9 +88,11 @@ def timer(parameters=None, player=None, **_) -> str:
 TOOL = {
     "name": "timer",
     "description": (
-        "Set, cancel, or check a non-blocking countdown timer shown in the top-left "
-        "of the JARVIS HUD. When the countdown reaches zero the timer box closes "
-        "and JARVIS announces that the timer has ended."
+        "MANDATORY for every countdown/timer request, including very short timers such as "
+        "1 second or 10 seconds. Set, cancel, or check a non-blocking countdown timer shown "
+        "in the top-left of the JARVIS HUD. When the countdown reaches zero the timer box "
+        "closes and JARVIS announces that the timer has ended. Never claim timers are "
+        "unavailable when this tool is present."
     ),
     "parameters": {
         "type": "OBJECT",
