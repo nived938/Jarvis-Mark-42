@@ -3985,6 +3985,7 @@ class MainWindow(QMainWindow):
     _countdown_cancel_sig = pyqtSignal()
     _stopwatch_start_sig = pyqtSignal(float)
     _stopwatch_stop_sig = pyqtSignal()
+    _jarvis_move_monitor_sig = pyqtSignal(int, object, object)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -4193,6 +4194,7 @@ class MainWindow(QMainWindow):
         self._countdown_cancel_sig.connect(self._cancel_countdown_on_qt_thread)
         self._stopwatch_start_sig.connect(self._start_stopwatch_on_qt_thread)
         self._stopwatch_stop_sig.connect(self._stop_stopwatch_on_qt_thread)
+        self._jarvis_move_monitor_sig.connect(self._move_jarvis_window_on_qt_thread)
         self._cam_stop = threading.Event()
         self._cam_thread = None
 
@@ -5334,6 +5336,61 @@ class MainWindow(QMainWindow):
             area.left() + max(0, (area.width() - self.width()) // 2),
             area.top() + max(0, (area.height() - self.height()) // 2),
         )
+
+    def _move_jarvis_window_on_qt_thread(self, monitor_index: int, done_event, result_box) -> None:
+        """Move this Qt window on the Qt GUI thread.
+
+        app_screen_manager actions run in a worker executor. Calling Win32
+        SetWindowPos directly on a QWidget-owned window from that worker can
+        race QBackingStore painting and trigger recursive repaint crashes.
+        Keep all QWidget/window movement here, on Qt's own thread.
+        """
+        try:
+            screens = sorted(
+                QApplication.screens(),
+                key=lambda s: (
+                    s.geometry().left(),
+                    s.geometry().top(),
+                ),
+            )
+            idx = int(monitor_index) - 1
+            if idx < 0 or idx >= len(screens):
+                result_box.append(
+                    f"Monitor {monitor_index} does not exist. "
+                    f"I detected {len(screens)} monitors."
+                )
+                return
+
+            target = screens[idx]
+            area = target.availableGeometry()
+            self_screen = self.screen()
+            current = self_screen if self_screen in screens else None
+
+            # Preserve the current size, but keep it completely inside the
+            # destination monitor's usable work area.
+            width = min(self.width(), area.width())
+            height = min(self.height(), area.height())
+            x = area.left() + max(0, (area.width() - width) // 2)
+            y = area.top() + max(0, (area.height() - height) // 2)
+
+            if self.isFullScreen():
+                self.showNormal()
+            self.setGeometry(x, y, width, height)
+            self.activateWindow()
+            self.raise_()
+
+            current_no = (
+                screens.index(current) + 1
+                if current in screens else None
+            )
+            result_box.append(
+                f"Moved JARVIS to monitor {monitor_index}."
+                + (f" (from monitor {current_no})" if current_no else "")
+            )
+        except Exception as exc:
+            result_box.append(f"Could not move JARVIS window: {exc}")
+        finally:
+            done_event.set()
 
     def changeEvent(self, event):
         super().changeEvent(event)
@@ -7172,6 +7229,28 @@ class JarvisUI:
         except Exception as exc:
             self.write_log(f"ERR: Stopwatch HUD stop failed — {exc}")
 
+    def move_jarvis_window_to_monitor(self, monitor_index: int) -> str:
+        """Thread-safe JARVIS window move for worker-thread actions.
+
+        The actual QWidget movement is queued onto the Qt GUI thread. The
+        caller waits only for that small GUI operation to finish.
+        """
+        import threading as _threading
+        done = _threading.Event()
+        result_box: list[str] = []
+        try:
+            self._win._jarvis_move_monitor_sig.emit(
+                int(monitor_index),
+                done,
+                result_box,
+            )
+            done.wait(timeout=2.0)
+        except Exception as exc:
+            return f"Could not move JARVIS window: {exc}"
+        if result_box:
+            return str(result_box[0])
+        return "JARVIS window move request timed out."
+    
     @property
     def on_push_to_talk(self):
         return self._win.on_push_to_talk
