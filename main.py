@@ -1712,6 +1712,23 @@ class JarvisLive:
                 self.speak("Sir, I couldn't calculate that road route.")
             return True
 
+        road_route_match = _re.fullmatch(
+            r"(?:show|open|draw|plot|calculate|find)\s+(?:the\s+)?(?:fastest\s+)?(?:road\s+)?route\s+from\s+(.+?)\s+to\s+(.+?)(?:\s+by\s+(?:road|car|drive))?",
+            low,
+            flags=_re.IGNORECASE,
+        )
+        if road_route_match:
+            start = road_route_match.group(1).strip()
+            end = road_route_match.group(2).strip()
+            try:
+                self.ui.show_geoapify_route(start, end)
+                self.ui.write_log(f"SYS: Geoapify road route — {start} → {end}")
+                self.speak(f"Sir, I am plotting the road route from {start} to {end}.")
+            except Exception as exc:
+                self.ui.write_log(f"ERR: Geoapify road route failed — {exc}")
+                self.speak("Sir, I couldn't plot that road route.")
+            return True
+
         map_in_for_match = _re.fullmatch(
             r"(?:search|find|look up)\s+(?:on|in)\s+(?:the\s+)?map\s+for\s+(.+)",
             low,
