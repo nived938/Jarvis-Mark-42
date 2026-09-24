@@ -5106,20 +5106,47 @@ class MainWindow(QMainWindow):
     def _build_header(self) -> QWidget:
         w = WindowHeader()
         w.setFixedHeight(54)
-        w.setStyleSheet(f"background: {C.DARK}; border-bottom: 1px solid {C.BORDER_B};")
+        w.setStyleSheet(
+            f"background: {C.DARK}; border-bottom: 1px solid {C.BORDER_B};"
+        )
+
+        # Keep the header in three explicit zones. The previous implementation
+        # used stretches on both sides of the title, so adding custom window
+        # controls changed the visual center of the whole header. Fixed side
+        # widths keep the JARVIS title truly centered while every control shares
+        # the same vertical baseline.
         lay = QHBoxLayout(w)
-        lay.setContentsMargins(16, 0, 16, 0)
+        lay.setContentsMargins(14, 0, 14, 0)
+        lay.setSpacing(0)
+        lay.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         def _badge(txt, color=C.TEXT_MED):
             l = QLabel(txt)
             l.setFont(QFont("Courier New", 8))
             l.setStyleSheet(f"color: {color}; background: transparent;")
+            l.setAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
+            l.setSizePolicy(
+                QSizePolicy.Policy.Fixed,
+                QSizePolicy.Policy.Fixed,
+            )
             return l
 
-        lay.addWidget(_badge(APP_VERSION, C.PRI_DIM))
-        lay.addSpacing(8)
+        # ── Left zone: release label + Settings + Stop ──────────────────────
+        left = QWidget()
+        left.setFixedWidth(250)
+        left_lay = QHBoxLayout(left)
+        left_lay.setContentsMargins(0, 0, 0, 0)
+        left_lay.setSpacing(8)
+        left_lay.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        version = _badge(APP_VERSION, C.PRI_DIM)
+        version.setFixedWidth(132)
+        left_lay.addWidget(version)
+
         self._drawer_btn = QPushButton("⚙")
-        self._drawer_btn.setFixedSize(26, 26)
+        self._drawer_btn.setFixedSize(28, 28)
         self._drawer_btn.setFont(QFont("Courier New", 11))
         self._drawer_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._drawer_btn.setToolTip("Settings & Controls")
@@ -5129,72 +5156,118 @@ class MainWindow(QMainWindow):
                 border: 1px solid {C.BORDER}; border-radius: 4px;
             }}
             QPushButton:hover {{ color: {C.PRI}; border-color: {C.PRI_DIM}; }}
-            QPushButton:checked {{ color: {C.PRI}; border-color: {C.PRI}; background: {C.PRI_GHO}; }}
+            QPushButton:checked {{
+                color: {C.PRI}; border-color: {C.PRI}; background: {C.PRI_GHO};
+            }}
         """)
         self._drawer_btn.setCheckable(True)
         self._drawer_btn.clicked.connect(self._toggle_drawer)
-        lay.addWidget(self._drawer_btn)
+        left_lay.addWidget(self._drawer_btn)
 
         self._emergency_btn = QPushButton("⚠ STOP")
-        self._emergency_btn.setFixedHeight(26)
-        self._emergency_btn.setMinimumWidth(68)
+        self._emergency_btn.setFixedSize(74, 28)
         self._emergency_btn.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
         self._emergency_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._emergency_btn.setToolTip("Emergency stop — halt JARVIS-controlled activity")
+        self._emergency_btn.setToolTip(
+            "Emergency stop — halt JARVIS-controlled activity"
+        )
         self._emergency_btn.setStyleSheet(f"""
             QPushButton {{
                 color: {C.RED}; background: transparent;
-                border: 1px solid {C.RED}; border-radius: 4px; padding: 2px 8px;
+                border: 1px solid {C.RED}; border-radius: 4px; padding: 2px 6px;
             }}
             QPushButton:hover {{ background: #22000a; }}
         """)
         self._emergency_btn.clicked.connect(self._on_emergency_button)
-        lay.addWidget(self._emergency_btn)
-        lay.addStretch()
+        left_lay.addWidget(self._emergency_btn)
+        lay.addWidget(left)
 
-        mid = QVBoxLayout(); mid.setSpacing(1)
+        # ── Center zone: assistant name + subtitle ──────────────────────────
+        center = QWidget()
+        center.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        mid = QVBoxLayout(center)
+        mid.setContentsMargins(0, 0, 0, 0)
+        mid.setSpacing(1)
+        mid.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         _disp = self._assistant_name.upper()
         self._title_lbl = QLabel(_disp)
-        self._title_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._title_lbl.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
         self._title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._title_lbl.setFont(QFont("Courier New", 17, QFont.Weight.Bold))
-        self._title_lbl.setStyleSheet(f"color: {C.PRI}; background: transparent;")
-        mid.addWidget(self._title_lbl)
-        _sub_text = ("A PowerPlay's Assistant"
-                     if _disp in ("JARVIS", "J.A.R.V.I.S")
-                     else "Personal AI Assistant")
+        self._title_lbl.setStyleSheet(
+            f"color: {C.PRI}; background: transparent;"
+        )
+        mid.addWidget(self._title_lbl, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        _sub_text = (
+            "A PowerPlay's Assistant"
+            if _disp in ("JARVIS", "J.A.R.V.I.S")
+            else "Personal AI Assistant"
+        )
         self._sub_lbl = QLabel(_sub_text)
-        self._sub_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._sub_lbl.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
         self._sub_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._sub_lbl.setFont(QFont("Courier New", 7))
-        self._sub_lbl.setStyleSheet(f"color: {C.PRI_DIM}; background: transparent;")
-        mid.addWidget(self._sub_lbl)
-        lay.addLayout(mid)
-        lay.addStretch()
+        self._sub_lbl.setStyleSheet(
+            f"color: {C.PRI_DIM}; background: transparent;"
+        )
+        mid.addWidget(self._sub_lbl, alignment=Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(center, stretch=1)
 
-        right_col = QVBoxLayout(); right_col.setSpacing(2)
+        # ── Right zone: clock/date + custom window controls ─────────────────
+        right = QWidget()
+        right.setFixedWidth(250)
+        right_lay = QHBoxLayout(right)
+        right_lay.setContentsMargins(0, 0, 0, 0)
+        right_lay.setSpacing(10)
+        right_lay.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        clock_col = QVBoxLayout()
+        clock_col.setContentsMargins(0, 0, 0, 0)
+        clock_col.setSpacing(1)
+        clock_col.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         self._clock_lbl = QLabel("00:00:00")
         self._clock_lbl.setFont(QFont("Courier New", 14, QFont.Weight.Bold))
-        self._clock_lbl.setStyleSheet(f"color: {C.PRI}; background: transparent;")
-        self._clock_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
-        right_col.addWidget(self._clock_lbl)
+        self._clock_lbl.setStyleSheet(
+            f"color: {C.PRI}; background: transparent;"
+        )
+        self._clock_lbl.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        clock_col.addWidget(self._clock_lbl)
+
         self._date_lbl = QLabel("")
         self._date_lbl.setFont(QFont("Courier New", 7))
-        self._date_lbl.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
-        self._date_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
-        right_col.addWidget(self._date_lbl)
-        lay.addLayout(right_col)
+        self._date_lbl.setStyleSheet(
+            f"color: {C.TEXT_DIM}; background: transparent;"
+        )
+        self._date_lbl.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        clock_col.addWidget(self._date_lbl)
 
-        # Native title-bar buttons are gone with FramelessWindowHint. These
-        # controls deliberately live inside the JARVIS header so they remain
-        # available even when the window is maximized.
+        clock_widget = QWidget()
+        clock_widget.setFixedWidth(104)
+        clock_widget.setLayout(clock_col)
+        right_lay.addWidget(clock_widget)
+
         controls = QHBoxLayout()
-        controls.setContentsMargins(8, 0, 0, 0)
+        controls.setContentsMargins(0, 0, 0, 0)
         controls.setSpacing(4)
+        controls.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         def _window_button(text: str, tooltip: str, callback, accent=None):
             btn = QPushButton(text)
-            btn.setFixedSize(30, 26)
+            btn.setFixedSize(30, 28)
             btn.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             color = accent or C.TEXT_DIM
@@ -5220,10 +5293,18 @@ class MainWindow(QMainWindow):
             return btn
 
         _window_button("—", "Minimize JARVIS", self.showMinimized)
-        self._window_max_btn = _window_button("□", "Maximize JARVIS", self._toggle_maximize)
+        self._window_max_btn = _window_button(
+            "□", "Maximize JARVIS", self._toggle_maximize
+        )
         _window_button("✕", "Close JARVIS", self.close, C.RED)
 
-        lay.addLayout(controls)
+        controls_widget = QWidget()
+        controls_widget.setFixedWidth(94)
+        controls_widget.setLayout(controls)
+        right_lay.addWidget(controls_widget)
+
+        lay.addWidget(right)
+
         return w
 
     def _toggle_maximize(self):
