@@ -498,6 +498,47 @@ def _handler(parameters, player=None, **_):
         return f'Close requested for "{window.title}".'
 
     if action in {"move", "move_to_monitor", "move_next_monitor"}:
+        # JARVIS itself is a Qt window. Its QWidget-backed window must never
+        # be moved with Win32 SetWindowPos from this worker thread because that
+        # can race Qt's QBackingStore paint operation and crash the process.
+        if (
+            player is not None
+            and app.casefold() in {
+                "jarvis",
+                "j.a.r.v.i.s",
+                "jarvis app",
+                "mark 42",
+                "mark-42",
+            }
+            and hasattr(player, "move_jarvis_window_to_monitor")
+        ):
+            if action == "move_next_monitor":
+                monitors = _monitor_rects()
+                if len(monitors) < 2:
+                    return "I detected fewer than two monitors."
+                current_handle = user32.MonitorFromWindow(
+                    window.hwnd,
+                    MONITOR_DEFAULTTONEAREST,
+                )
+                current_index = next(
+                    (
+                        index
+                        for index, item in enumerate(monitors)
+                        if item["handle"] == int(current_handle)
+                    ),
+                    0,
+                )
+                target_monitor = (current_index + 1) % len(monitors) + 1
+                return player.move_jarvis_window_to_monitor(target_monitor)
+
+            try:
+                monitor = int(parameters.get("monitor", 0))
+            except (TypeError, ValueError):
+                monitor = 0
+            if monitor < 1:
+                return "Specify the destination monitor number, such as 1 or 2."
+            return player.move_jarvis_window_to_monitor(monitor)
+
         if action == "move_next_monitor":
             monitors = _monitor_rects()
             if len(monitors) < 2:
