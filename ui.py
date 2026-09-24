@@ -3261,6 +3261,139 @@ class RemoteKeyOverlay(QWidget):
         self.closed.emit()
 
 
+
+class HudResultView(QWidget):
+    """Full-size center HUD for Gmail, calendar, messages, code, and other results."""
+
+    closed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"background: {C.BG};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 14, 18, 14)
+        root.setSpacing(10)
+
+        hdr = QHBoxLayout()
+        hdr.setSpacing(8)
+
+        self._title = QLabel("◈  JARVIS RESULT")
+        self._title.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
+        self._title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        hdr.addWidget(self._title)
+        hdr.addStretch()
+
+        self._status = QLabel("RESULT")
+        self._status.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._status.setStyleSheet(
+            f"color: {C.GREEN}; background: rgba(0,255,136,14); "
+            f"border: 1px solid {C.GREEN_D}; border-radius: 4px; padding: 2px 6px;"
+        )
+        hdr.addWidget(self._status)
+
+        copy_btn = QPushButton("COPY ALL")
+        copy_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_btn.setStyleSheet(f"""
+            QPushButton {{
+                color: {C.TEXT_DIM}; background: transparent;
+                border: 1px solid {C.BORDER}; border-radius: 4px;
+                padding: 4px 7px;
+            }}
+            QPushButton:hover {{ color: {C.PRI}; border-color: {C.PRI}; background: {C.PRI_GHO}; }}
+        """)
+        copy_btn.clicked.connect(self.copy_all)
+        hdr.addWidget(copy_btn)
+
+        close = QPushButton("✕  CLOSE")
+        close.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setStyleSheet(f"""
+            QPushButton {{
+                color: {C.TEXT_DIM}; background: transparent;
+                border: 1px solid {C.BORDER}; border-radius: 4px;
+                padding: 4px 7px;
+            }}
+            QPushButton:hover {{ color: {C.PRI}; border-color: {C.PRI}; background: {C.PRI_GHO}; }}
+        """)
+        close.clicked.connect(self.close_view)
+        hdr.addWidget(close)
+        root.addLayout(hdr)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {C.BORDER};")
+        root.addWidget(sep)
+
+        self._display = QTextEdit()
+        self._display.setReadOnly(True)
+        self._display.setAcceptRichText(False)
+        self._display.setFont(QFont("Courier New", 9))
+        self._display.setStyleSheet(f"""
+            QTextEdit {{
+                background: rgba(0, 8, 14, 245);
+                color: {C.TEXT};
+                border: 1px solid {C.BORDER_B};
+                border-radius: 8px;
+                padding: 12px 14px;
+                selection-background-color: {C.PRI_GHO};
+            }}
+            QScrollBar:vertical {{
+                background: {C.BG}; width: 8px; border: none;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {C.BORDER_B}; border-radius: 4px; min-height: 24px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0; border: none;
+            }}
+            QScrollBar:horizontal {{
+                background: {C.BG}; height: 8px; border: none;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: {C.BORDER_B}; border-radius: 4px; min-width: 24px;
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0; border: none;
+            }}
+        """)
+        root.addWidget(self._display, stretch=1)
+
+        self._hint = QLabel("Scroll to read • Select text to copy • Say “close” to return")
+        self._hint.setFont(QFont("Courier New", 7))
+        self._hint.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        root.addWidget(self._hint)
+
+    def set_result(self, title: str, text: str, code: bool = False) -> None:
+        self._title.setText(("◈  " + str(title or "JARVIS RESULT").upper())[:72])
+        self._status.setText("CODE" if code else "RESULT")
+        self._display.setLineWrapMode(
+            QTextEdit.LineWrapMode.NoWrap if code else QTextEdit.LineWrapMode.WidgetWidth
+        )
+        self._display.setPlainText(str(text or ""))
+        self._display.moveCursor(self._display.textCursor().MoveOperation.Start)
+        self._hint.setText(
+            "Select text to copy • Code is copied automatically • Say “close” to return"
+            if code else
+            "Scroll to read • Select text to copy • Say “close” to return"
+        )
+
+    def copy_all(self) -> None:
+        try:
+            QApplication.clipboard().setText(self._display.toPlainText())
+            self._status.setText("COPIED")
+            QTimer.singleShot(1600, lambda: self._status.setText(
+                "CODE" if self._display.lineWrapMode() == QTextEdit.LineWrapMode.NoWrap else "RESULT"
+            ))
+        except Exception:
+            pass
+
+    def close_view(self) -> None:
+        self.closed.emit()
+
+
 class MainWindow(QMainWindow):
     _log_sig        = pyqtSignal(str)
     _state_sig      = pyqtSignal(str)
@@ -3281,6 +3414,8 @@ class MainWindow(QMainWindow):
     _quiz_sig       = pyqtSignal(str, object, object)  # (topic, questions, grader)
     _quiz_hide_sig  = pyqtSignal()
     _review_sig     = pyqtSignal(str, str, object, object)  # document review payload
+    _result_sig     = pyqtSignal(str, str, bool)
+    _result_close_sig = pyqtSignal()
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -3386,10 +3521,14 @@ class MainWindow(QMainWindow):
         # Stack: 0 = animated HUD, 1 = live camera, 2 = full weather HUD
         self._weather_view = WeatherHudView()
         self._weather_view.closed.connect(self._on_weather_closed)
+        self._result_hud = HudResultView()
+        self._result_hud.closed.connect(self._close_result_hud)
+
         self._hud_cam_stack = QStackedWidget()
         self._hud_cam_stack.addWidget(self.hud)
         self._hud_cam_stack.addWidget(_cam_cont)
         self._hud_cam_stack.addWidget(self._weather_view)
+        self._hud_cam_stack.addWidget(self._result_hud)
 
         self._center_split = QSplitter(Qt.Orientation.Vertical)
         self._center_split.setStyleSheet(f"""
@@ -3451,6 +3590,8 @@ class MainWindow(QMainWindow):
         self._quiz_sig.connect(self._show_quiz)
         self._quiz_hide_sig.connect(self._hide_quiz)
         self._review_sig.connect(self._show_review)
+        self._result_sig.connect(self._show_result_hud)
+        self._result_close_sig.connect(self._close_result_hud)
         self._cam_stop = threading.Event()
         self._cam_thread = None
 
@@ -3526,6 +3667,24 @@ class MainWindow(QMainWindow):
                 }}
                 QPushButton:hover {{ background: #22000a; }}
             """)
+
+    def _show_result_hud(self, title: str, text: str, code: bool) -> None:
+        try:
+            if self._hud_cam_stack.currentIndex() == 1:
+                self._cam_stop.set()
+            if self._weather_view.isVisible():
+                self._weather_view.close_view()
+            self._result_hud.set_result(title, text, bool(code))
+            self._hud_cam_stack.setCurrentIndex(3)
+        except Exception:
+            pass
+
+    def _close_result_hud(self) -> None:
+        try:
+            if self._hud_cam_stack.currentIndex() == 3:
+                self._hud_cam_stack.setCurrentIndex(0)
+        except Exception:
+            pass
 
     def _show_weather(self, payload) -> None:
         """Show weather as a temporary full weather HUD, like live camera."""
@@ -5934,19 +6093,23 @@ class JarvisUI:
             time.sleep(0.1)
 
     def show_content(self, title: str, text: str):
-        """Thread-safe: display persistent results in the HUD content viewer."""
-        self._win._content_sig.emit(title[:48], text[:120000])
+        """Thread-safe: display a result in the large center HUD viewer."""
+        self._win._result_sig.emit(
+            title[:72],
+            text[:120000],
+            str(title or "").upper().startswith("CODE"),
+        )
 
     def is_content_open(self) -> bool:
         try:
-            return bool(self._win._content_panel.isVisible())
+            return bool(self._win._hud_cam_stack.currentIndex() == 3)
         except Exception:
             return False
 
     def stop_content(self) -> None:
-        """Thread-safe: close the persistent HUD result viewer."""
+        """Thread-safe: close the large center HUD result viewer."""
         try:
-            self._win._content_close_sig.emit()
+            self._win._result_close_sig.emit()
         except Exception:
             pass
 
