@@ -105,6 +105,16 @@ def save_voice(voice_name: str) -> None:
 
 
 # ── Local AI / Ollama ────────────────────────────────────────────────────────
+def get_local_ai_model() -> str:
+    """Return the preferred Ollama model, or empty when auto-selection is enabled."""
+    return str(load_api_keys().get("local_ai_model", "") or "").strip()
+
+
+def save_local_ai_model(model: str) -> None:
+    """Persist the preferred Ollama model name."""
+    _save_flag("local_ai_model", str(model or "").strip())
+
+
 def get_local_ai_enabled() -> bool:
     """Whether JARVIS may use the local Ollama fallback/router."""
     return bool(load_api_keys().get("local_ai_enabled", True))
