@@ -1988,22 +1988,23 @@ class JarvisLive:
 
         # Countdown timers are local and non-blocking. They update a small
         # box at the top-left of the JARVIS HUD and disappear automatically at zero.
-        timer_match = _re.search(
-            r"(?:set|start|begin|create)\s+(?:a\s+)?(?:timer\s+)?for\s+(?P<duration>.+?)\s+timer$",
-            low,
-            flags=_re.IGNORECASE,
-        ) or _re.search(
-            r"(?:set|start|begin|create)\s+(?:a\s+)?(?P<duration>\d+(?:\.\d+)?\s*(?:seconds?|secs?|s|minutes?|mins?|min|m|hours?|hrs?|hr|h))\s+timer$",
-            low,
-            flags=_re.IGNORECASE,
-        ) or _re.search(
-            r"(?:set|start|begin|create)\s+(?:a\s+)?timer\s+for\s+(?P<duration>\d+(?:\.\d+)?\s*(?:seconds?|secs?|s|minutes?|mins?|min|m|hours?|hrs?|hr|h))$",
-            low,
-            flags=_re.IGNORECASE,
-        ) or _re.search(
-            r"timer\s+for\s+(?P<duration>\d+(?:\.\d+)?\s*(?:seconds?|secs?|s|minutes?|mins?|min|m|hours?|hrs?|hr|h))$",
-            low,
-            flags=_re.IGNORECASE,
+        _duration_re = r"(?P<duration>\d+(?:\.\d+)?\s*(?:seconds?|secs?|s|minutes?|mins?|min|m|hours?|hrs?|hr|h))"
+        timer_match = (
+            _re.fullmatch(
+                rf"(?:set|start|begin|create)\s+(?:a\s+)?{_duration_re}\s+(?:countdown\s+)?timer",
+                low,
+                flags=_re.IGNORECASE,
+            )
+            or _re.fullmatch(
+                rf"(?:set|start|begin|create)\s+(?:a\s+)?timer\s+for\s+{_duration_re}",
+                low,
+                flags=_re.IGNORECASE,
+            )
+            or _re.fullmatch(
+                rf"timer\s+for\s+{_duration_re}",
+                low,
+                flags=_re.IGNORECASE,
+            )
         )
         if timer_match:
             duration = timer_match.group("duration").strip()
@@ -2774,6 +2775,20 @@ class JarvisLive:
                         "response": None, "session_memory": None}
                 r = await loop.run_in_executor(None, lambda: self._action_registry.run(name, args, _ctx))
                 result = r or "Done."
+
+                # Timing actions also own a visual HUD. Keep the HUD synchronized
+                # even when Gemini invoked the action directly rather than through
+                # the local-command fast path.
+                if name == "stopwatch":
+                    _timing_action = str(args.get("action") or "").strip().lower()
+                    if _timing_action in {"start", "resume"}:
+                        self.ui.start_stopwatch_hud()
+                    elif _timing_action in {"pause", "stop", "reset"}:
+                        self.ui.stop_stopwatch_hud()
+                elif name == "timer":
+                    _timer_action = str(args.get("action") or "").strip().lower()
+                    if _timer_action in {"cancel", "stop", "clear"}:
+                        self.ui.cancel_countdown_timer()
 
                 if name == "file_controller" and bool(args.get("preview", False)):
                     self.ui.show_content("FILE OPERATION PREVIEW", str(result))
