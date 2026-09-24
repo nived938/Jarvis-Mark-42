@@ -187,9 +187,7 @@ routing. Complex or diagnostic work can invoke a second reasoning tier that
 returns an executable decision summary while keeping private chain-of-thought
 internal.
 
-The Android Companion uses ADB for device discovery, wireless debugging
-connect/disconnect, app launch, touch/input, screenshots, battery/storage
-inspection, and optional scrcpy mirroring.
+The Android Companion uses ADB as the full control plane: device discovery, wireless debugging connect/disconnect, Home/Back/Recents/Power/Wake, touch/swipe/text/key input, app launch/stop/info/install/uninstall, Android settings, notification and quick-settings panels, volume/brightness, current-app inspection, screenshots, battery/storage, and file push/pull. scrcpy runs only on the PC and its native mirror window is embedded directly into the JARVIS HUD, so the user can control the phone with mouse and keyboard inside JARVIS without installing an Android companion app.
 
 ### Monitoring and reliability
 
