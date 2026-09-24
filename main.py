@@ -1346,6 +1346,28 @@ class JarvisLive:
             self.ui.write_log("SYS: Camera HUD closed.")
             return True
 
+        # When the Geoapify map is already open, location phrases mean
+        # "show me where I am on this map", not a weather lookup.
+        if self.ui.is_geo_maps_hud_open() and low in {
+            "where am i",
+            "where i am",
+            "where am i now",
+            "my location",
+            "show my location",
+            "show where i am",
+            "locate me",
+            "find my location",
+            "current location",
+        }:
+            try:
+                self.ui.locate_geoapify_maps()
+                self.ui.write_log("SYS: Centered Geoapify Maps on your approximate current location.")
+                self.speak("Sir, I marked your approximate current location on the map.")
+            except Exception as exc:
+                self.ui.write_log(f"ERR: Geoapify location failed — {exc}")
+                self.speak("Sir, I couldn't locate you on the map.")
+            return True
+
         # Resource commands are local and always open the center result HUD.
         if low in {
             "show my resource usage",
