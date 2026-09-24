@@ -123,10 +123,15 @@ def stopwatch(parameters=None, **_) -> str:
 TOOL = {
     "name": "stopwatch",
     "description": (
-        "Control a persistent count-up stopwatch. Start, pause, resume, stop, reset, "
-        "record laps, list laps, or get elapsed time. Use this for open-ended timing. "
-        "When the user says 'set X seconds stopwatch' or otherwise gives a duration, "
-        "use the timer tool instead so it automatically stops after that duration."
+        "Control JARVIS's stopwatch HUD. Start, pause, resume, stop, reset, "
+        "record laps, list laps, or get elapsed time. This is a JARVIS HUD, "
+        "not a Windows application. If the user says 'close stopwatch', "
+        "'close the stopwatch', 'stop stopwatch', 'hide stopwatch', or "
+        "'close stopwatch HUD', use this stopwatch action with action='stop' "
+        "and close/hide the stopwatch HUD. Never use app_screen_manager to "
+        "close the stopwatch. When the user says 'set X seconds stopwatch' "
+        "or otherwise gives a duration, use the timer tool instead so it "
+        "automatically stops after that duration."
     ),
     "parameters": {
         "type": "OBJECT",
