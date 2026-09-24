@@ -1688,6 +1688,46 @@ class JarvisLive:
                 self.speak("Sir, I couldn't enable map location selection.")
             return True
 
+        # Road-distance commands are map-native. They resolve both places,
+        # calculate a driving route, and draw the route between the two endpoints.
+        road_distance_match = _re.fullmatch(
+            r"(?:what\s+is\s+)?(?:the\s+)?distance\s+from\s+(.+?)\s+to\s+(.+?)(?:\s+by\s+(?:road|car|drive))?",
+            low,
+            flags=_re.IGNORECASE,
+        )
+        if road_distance_match:
+            start = road_distance_match.group(1).strip()
+            end = road_distance_match.group(2).strip()
+            try:
+                self.ui.show_geoapify_route(start, end)
+                self.ui.write_log(
+                    f"SYS: Geoapify road route — {start} → {end}"
+                )
+                self.speak(
+                    f"Sir, I am calculating the road route from {start} to {end "
+                    "} and showing it on the map."
+                )
+            except Exception as exc:
+                self.ui.write_log(f"ERR: Geoapify road route failed — {exc}")
+                self.speak("Sir, I couldn't calculate that road route.")
+            return True
+
+        map_in_for_match = _re.fullmatch(
+            r"(?:search|find|look up)\s+(?:on|in)\s+(?:the\s+)?map\s+for\s+(.+)",
+            low,
+            flags=_re.IGNORECASE,
+        )
+        if map_in_for_match:
+            query = map_in_for_match.group(1).strip()
+            try:
+                self.ui.show_geoapify_maps(query)
+                self.ui.write_log(f"SYS: Geoapify Maps search — {query}")
+                self.speak(f"Sir, I searched the map for {query}.")
+            except Exception as exc:
+                self.ui.write_log(f"ERR: Geoapify Maps search failed — {exc}")
+                self.speak("Sir, I couldn't search the map.")
+            return True
+
         # Maps are a direct HUD capability. Do not route the explicit local
         # command through the action registry: the HUD must open even if the
         # discoverable action is unavailable or loaded with a different context.
