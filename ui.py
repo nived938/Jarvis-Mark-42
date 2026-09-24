@@ -6924,10 +6924,19 @@ class JarvisUI:
     def on_timer_finished(self, cb):
         self._win.on_timer_finished = cb
 
-    def start_countdown_timer(self, seconds: float, title: str = "TIMER") -> None:
+    def start_countdown_timer(
+        self,
+        seconds: float,
+        title: str = "TIMER",
+        finished_kind: str = "timer",
+    ) -> None:
         """Thread-safe countdown start used by the timer action."""
         try:
-            self._win.start_countdown_timer(float(seconds), str(title or "TIMER"))
+            self._win.start_countdown_timer(
+                float(seconds),
+                str(title or "TIMER"),
+                str(finished_kind or "timer"),
+            )
         except Exception as exc:
             self.write_log(f"ERR: Countdown UI unavailable — {exc}")
 
