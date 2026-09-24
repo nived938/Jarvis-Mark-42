@@ -700,7 +700,7 @@ def _hud_result_payload(name: str, args: dict, result: str) -> tuple[str, str, b
                 + "\n\n===== JARVIS RESULT =====\n"
                 + text
             )
-            auto_copy = action in {"WRITE", "EDIT", "BUILD", "OPTIMIZE", "AUTO"}
+            auto_copy = action in {"WRITE", "EDIT", "BUILD", "OPTIMIZE"}
             return "CODE • " + action, body, auto_copy
         return "CODE • RESULT", text, False
 
