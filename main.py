@@ -107,6 +107,7 @@ from core.no_progress import NoProgressGuard
 from core.voice_profiles import active_voice
 from core.crash_detective import install_hooks as install_crash_detective_hooks
 from actions.notification_intelligence import should_interrupt
+from actions.habit_learning import observe_user_text
 
 # How long the assistant stays awake with no user speech before it auto-sleeps
 # again (wake-word mode only).
@@ -638,6 +639,12 @@ _HUD_RESULT_TOOLS = {
     "crash_detective",
     "network_quality",
     "visual_ui",
+    "download_organizer",
+    "habit_learning",
+    "environment_doctor",
+    "storage_cleanup",
+    "hardware_health",
+    "android_companion",
 }
 
 
@@ -704,6 +711,19 @@ def _hud_result_payload(name: str, args: dict, result: str) -> tuple[str, str, b
         if receiver:
             title += f" • {receiver[:24]}"
         return title, text, False
+
+    if name in {"download_organizer", "habit_learning", "environment_doctor",
+                "storage_cleanup", "hardware_health", "android_companion"}:
+        action = str(args.get("action", "STATUS") or "STATUS").upper()
+        label_map = {
+            "download_organizer": "DOWNLOAD ORGANIZER",
+            "habit_learning": "HABIT LEARNING",
+            "environment_doctor": "ENVIRONMENT DOCTOR",
+            "storage_cleanup": "STORAGE CLEANUP",
+            "hardware_health": "HARDWARE HEALTH",
+            "android_companion": "ANDROID COMPANION",
+        }
+        return f"{label_map[name]} • {action}", text, False
 
     if name == "code_helper":
         code = _code_for_hud(args, text)
@@ -3186,6 +3206,11 @@ class JarvisLive:
                                         "ts": datetime.now().isoformat(),
                                     }))
                             self._current_turn_text = full_in
+                            if full_in:
+                                try:
+                                    observe_user_text(full_in)
+                                except Exception as _habit_exc:
+                                    self.ui.write_log(f"SYS: Habit learning skipped — {_habit_exc}")
                             in_buf = []
                             self._client_turn_started = 0.0
 
