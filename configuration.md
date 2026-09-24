@@ -136,3 +136,16 @@ memory/notification_preferences.json
 ```
 
 Quiet mode suppresses ordinary/important notification interruptions for a chosen period while allowing critical alerts to pass through.
+
+## Local AI selection
+
+```json
+{
+  "local_ai_enabled": true,
+  "local_ai_model": "qwen3.5:4b",
+  "local_ai_mode": "balanced",
+  "ollama_base_url": "http://127.0.0.1:11434"
+}
+```
+
+`local_ai_model` is the preferred installed Ollama model selected from the JARVIS HUD picker. `local_ai_mode` controls automatic routing when no explicit mode is supplied. Supported modes are `fast`, `balanced`, `smart`, and `vision`.
