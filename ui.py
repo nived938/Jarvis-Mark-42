@@ -6909,6 +6909,40 @@ class JarvisUI:
     def on_timer_finished(self, cb):
         self._win.on_timer_finished = cb
 
+    def start_countdown_timer(self, seconds: float, title: str = "TIMER") -> None:
+        """Thread-safe countdown start used by the timer action."""
+        try:
+            self._win.start_countdown_timer(float(seconds), str(title or "TIMER"))
+        except Exception as exc:
+            self.write_log(f"ERR: Countdown UI unavailable — {exc}")
+
+    def cancel_countdown_timer(self) -> None:
+        """Thread-safe countdown cancellation."""
+        try:
+            self._win.cancel_countdown_timer()
+        except Exception as exc:
+            self.write_log(f"ERR: Countdown cancel failed — {exc}")
+
+    def countdown_timer_remaining(self) -> float | None:
+        try:
+            return self._win.countdown_timer_remaining()
+        except Exception:
+            return None
+
+    def start_stopwatch_hud(self, elapsed: float = 0.0) -> None:
+        """Thread-safe stopwatch HUD start/resume."""
+        try:
+            self._win.start_stopwatch_hud(float(elapsed))
+        except Exception as exc:
+            self.write_log(f"ERR: Stopwatch UI unavailable — {exc}")
+
+    def stop_stopwatch_hud(self) -> None:
+        """Thread-safe stopwatch HUD stop/hide."""
+        try:
+            self._win.stop_stopwatch_hud()
+        except Exception as exc:
+            self.write_log(f"ERR: Stopwatch HUD stop failed — {exc}")
+
     @property
     def on_push_to_talk(self):
         return self._win.on_push_to_talk
