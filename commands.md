@@ -263,6 +263,9 @@ The map opens in the center HUD and supports address search plus nearby place-ca
 set my location
 where is my location
 where I am
+search in map for Lulu Mall
+what is the distance from Kasaragod to Kalanad by road
+show road route from Kasaragod to Kalanad
 open map and search for Lulu Mall near me
 ```
 
