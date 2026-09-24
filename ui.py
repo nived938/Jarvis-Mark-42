@@ -20,7 +20,7 @@ else:
 
 from PyQt6.QtCore import (
     QEasingCurve, QLineF, QMimeData, QObject, QParallelAnimationGroup, QPointF,
-    QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal,
+    QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, QUrl, pyqtSignal,
 )
 from PyQt6.QtGui import (
     QBrush, QColor, QConicalGradient, QDragEnterEvent, QDropEvent, QFont,
@@ -34,6 +34,13 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QWidget, QProgressBar, QListWidget,
 )
 
+
+try:
+    from PyQt6.QtWebEngineWidgets import QWebEngineView
+    _GEO_MAP_WEBENGINE = True
+except Exception:
+    QWebEngineView = None
+    _GEO_MAP_WEBENGINE = False
 
 try:
     from core.avatar import HoloAvatar
@@ -3562,6 +3569,151 @@ class LocalAIHudView(QWidget):
 
 
 
+
+class GeoapifyMapsHudView(QWidget):
+    """Leaflet + Geoapify map viewer embedded in the center HUD."""
+
+    closed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"background: {C.BG};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 8, 10, 8)
+        root.setSpacing(8)
+
+        header = QHBoxLayout()
+        title = QLabel("◈  GEOAPIFY MAPS")
+        title.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        header.addWidget(title)
+        header.addStretch()
+
+        self._status = QLabel("READY")
+        self._status.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._status.setStyleSheet(
+            f"color: {C.GREEN}; background: transparent; padding-right: 8px;"
+        )
+        header.addWidget(self._status)
+
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Search places or addresses…")
+        self._search.setFont(QFont("Courier New", 8))
+        self._search.setMinimumWidth(230)
+        self._search.setStyleSheet(f"""
+            QLineEdit {{
+                color: {C.TEXT}; background: {C.PANEL2};
+                border: 1px solid {C.BORDER}; border-radius: 4px;
+                padding: 5px 8px;
+            }}
+            QLineEdit:focus {{ border-color: {C.PRI}; }}
+        """)
+        self._search.returnPressed.connect(self.search_current)
+        header.addWidget(self._search)
+
+        search = QPushButton("⌕ SEARCH")
+        search.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        search.setCursor(Qt.CursorShape.PointingHandCursor)
+        search.setStyleSheet(f"""
+            QPushButton {{
+                color: {C.TEXT_DIM}; background: transparent;
+                border: 1px solid {C.BORDER}; border-radius: 4px;
+                padding: 5px 8px;
+            }}
+            QPushButton:hover {{
+                color: {C.PRI}; border-color: {C.PRI}; background: {C.PRI_GHO};
+            }}
+        """)
+        search.clicked.connect(self.search_current)
+        header.addWidget(search)
+
+        close = QPushButton("✕  CLOSE")
+        close.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setStyleSheet(f"""
+            QPushButton {{
+                color: {C.TEXT_DIM}; background: transparent;
+                border: 1px solid {C.BORDER}; border-radius: 4px;
+                padding: 5px 8px;
+            }}
+            QPushButton:hover {{
+                color: {C.PRI}; border-color: {C.PRI}; background: {C.PRI_GHO};
+            }}
+        """)
+        close.clicked.connect(self.close_view)
+        header.addWidget(close)
+        root.addLayout(header)
+
+        self._web = None
+        if _GEO_MAP_WEBENGINE:
+            self._web = QWebEngineView(self)
+            self._web.setStyleSheet(f"border: 1px solid {C.BORDER_B};")
+            self._web.loadStarted.connect(lambda: self._set_status("LOADING"))
+            self._web.loadFinished.connect(self._on_loaded)
+            root.addWidget(self._web, stretch=1)
+        else:
+            fallback = QLabel(
+                "Geoapify Maps needs PyQt6-WebEngine.\n\n"
+                "Install it with:\n"
+                "pip install PyQt6-WebEngine\n\n"
+                "Then restart JARVIS."
+            )
+            fallback.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            fallback.setWordWrap(True)
+            fallback.setFont(QFont("Courier New", 9))
+            fallback.setStyleSheet(
+                f"color: {C.TEXT}; background: rgba(0,8,14,245); "
+                f"border: 1px solid {C.BORDER_B}; border-radius: 8px; padding: 20px;"
+            )
+            root.addWidget(fallback, stretch=1)
+
+        hint = QLabel(
+            "Geoapify + OpenStreetMap • search addresses and nearby places • "
+            "say “close” to return"
+        )
+        hint.setFont(QFont("Courier New", 7))
+        hint.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        root.addWidget(hint)
+
+    def _set_status(self, text: str) -> None:
+        self._status.setText(str(text or "READY"))
+
+    def open_map(self, query: str = "") -> None:
+        query = str(query or "").strip()
+        self._search.setText(query)
+        if not _GEO_MAP_WEBENGINE or self._web is None:
+            self._set_status("WEBENGINE REQUIRED")
+            return
+        try:
+            from core.geoapify_maps import map_url
+            self._set_status("LOADING")
+            self._web.setUrl(QUrl(map_url(query)))
+        except Exception as exc:
+            self._set_status("NOT CONFIGURED")
+            if self._web is not None:
+                self._web.setHtml(
+                    "<html><body style='background:#00060a;color:#8ffcff;"
+                    "font-family:Consolas;padding:24px'>"
+                    "<h3>Geoapify Maps</h3>"
+                    f"<p>{str(exc).replace('&','&amp;').replace('<','&lt;')}</p>"
+                    "</body></html>"
+                )
+
+    def search_current(self) -> None:
+        query = self._search.text().strip()
+        if not query:
+            return
+        self.open_map(query)
+
+    def _on_loaded(self, ok: bool) -> None:
+        self._set_status("ONLINE" if ok else "LOAD ERROR")
+
+    def close_view(self) -> None:
+        self.closed.emit()
+
+
 class MainWindow(QMainWindow):
     _log_sig        = pyqtSignal(str)
     _state_sig      = pyqtSignal(str)
@@ -3585,6 +3737,7 @@ class MainWindow(QMainWindow):
     _result_sig     = pyqtSignal(str, str, bool)
     _result_close_sig = pyqtSignal()
     _local_ai_sig    = pyqtSignal(object)
+    _geo_maps_sig    = pyqtSignal(str)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -3696,6 +3849,8 @@ class MainWindow(QMainWindow):
         self._local_ai_hud = LocalAIHudView()
         self._local_ai_hud.closed.connect(self._close_local_ai_hud)
         self._local_ai_hud.selected.connect(self._on_local_ai_selected)
+        self._geo_maps_hud = GeoapifyMapsHudView()
+        self._geo_maps_hud.closed.connect(self._close_geo_maps_hud)
 
         self._hud_cam_stack = QStackedWidget()
         self._hud_cam_stack.addWidget(self.hud)
@@ -3703,6 +3858,7 @@ class MainWindow(QMainWindow):
         self._hud_cam_stack.addWidget(self._weather_view)
         self._hud_cam_stack.addWidget(self._result_hud)
         self._hud_cam_stack.addWidget(self._local_ai_hud)
+        self._hud_cam_stack.addWidget(self._geo_maps_hud)
 
         self._center_split = QSplitter(Qt.Orientation.Vertical)
         self._center_split.setStyleSheet(f"""
@@ -3767,6 +3923,7 @@ class MainWindow(QMainWindow):
         self._result_sig.connect(self._show_result_hud)
         self._result_close_sig.connect(self._close_result_hud)
         self._local_ai_sig.connect(self._show_local_ai_hud)
+        self._geo_maps_sig.connect(self._show_geo_maps)
         self._cam_stop = threading.Event()
         self._cam_thread = None
 
@@ -3920,6 +4077,21 @@ class MainWindow(QMainWindow):
             }
         self._local_ai_sig.emit(payload)
 
+
+    def show_geoapify_maps(self, query: str = "") -> None:
+        """Thread-safe: open Geoapify Maps in the center HUD."""
+        try:
+            self._win.show_geoapify_maps(str(query or ""))
+        except Exception:
+            pass
+
+    def is_geo_maps_hud_open(self) -> bool:
+        try:
+            return bool(self._win.is_geo_maps_hud_open())
+        except Exception:
+            return False
+
+
     def show_local_ai_picker(self) -> None:
         threading.Thread(
             target=self._load_local_ai_hud,
@@ -3932,6 +4104,43 @@ class MainWindow(QMainWindow):
             return self._hud_cam_stack.currentIndex() == 4 and self._local_ai_hud.isVisible()
         except Exception:
             return False
+
+
+    def _show_geo_maps(self, query: str = "") -> None:
+        """Show the Geoapify map HUD on the Qt thread."""
+        try:
+            if self._hud_cam_stack.currentIndex() == 1:
+                self._cam_stop.set()
+            if self._weather_view.isVisible():
+                self._weather_view.close_view()
+            if self._result_hud.isVisible():
+                self._close_result_hud()
+            if self._local_ai_hud.isVisible():
+                self._close_local_ai_hud()
+            self._hud_cam_stack.setCurrentIndex(5)
+            self._geo_maps_hud.open_map(query)
+        except Exception:
+            pass
+
+    def show_geoapify_maps(self, query: str = "") -> None:
+        """Thread-safe: open/search Geoapify Maps in the center HUD."""
+        try:
+            self._geo_maps_sig.emit(str(query or ""))
+        except Exception:
+            pass
+
+    def is_geo_maps_hud_open(self) -> bool:
+        try:
+            return self._hud_cam_stack.currentIndex() == 5
+        except Exception:
+            return False
+
+    def _close_geo_maps_hud(self) -> None:
+        try:
+            if self._hud_cam_stack.currentIndex() == 5:
+                self._hud_cam_stack.setCurrentIndex(0)
+        except Exception:
+            pass
 
     def _show_weather(self, payload) -> None:
         """Show weather as a temporary full weather HUD, like live camera."""
@@ -3987,7 +4196,7 @@ class MainWindow(QMainWindow):
 
     def is_any_hud_open(self) -> bool:
         try:
-            return self._hud_cam_stack.currentIndex() in (1, 2, 3, 4)
+            return self._hud_cam_stack.currentIndex() in (1, 2, 3, 4, 5)
         except Exception:
             return False
 
@@ -4005,6 +4214,8 @@ class MainWindow(QMainWindow):
                 self._close_result_hud()
             elif idx == 4:
                 self._close_local_ai_hud()
+            elif idx == 5:
+                self._close_geo_maps_hud()
         except Exception:
             try:
                 self._hud_cam_stack.setCurrentIndex(0)
