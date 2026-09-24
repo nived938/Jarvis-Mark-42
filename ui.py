@@ -3884,9 +3884,9 @@ class MainWindow(QMainWindow):
         try:
             from memory.config_manager import save_local_ai_model
             save_local_ai_model(model)
-            self.write_log(f"SYS: Local AI selected — {model}")
+            self._log_sig.emit(f"SYS: Local AI selected — {model}")
         except Exception as exc:
-            self.write_log(f"ERR: Could not save Local AI model — {exc}")
+            self._log_sig.emit(f"ERR: Could not save Local AI model — {exc}")
 
     def _close_local_ai_hud(self) -> None:
         try:
