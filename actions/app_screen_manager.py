@@ -440,10 +440,34 @@ def _handler(parameters, player=None, **_):
 
     if action == "list":
         return _list_windows()
-
+    
+    # JARVIS HUD controls are not Windows applications.
+    # "close stopwatch" must close the stopwatch HUD instead of
+    # searching for a Windows window named "stopwatch".
+    if action in {"close", "stop", "hide"} and app.casefold().strip() in {
+        "stopwatch",
+        "the stopwatch",
+        "stopwatch hud",
+        "the stopwatch hud",
+    }:
+        try:
+            # Stop the persistent stopwatch state as well as hiding the HUD.
+            from actions.stopwatch import stopwatch
+            stopwatch({"action": "stop"})
+        except Exception:
+            pass
+    
+        if player is not None:
+            try:
+                player.stop_stopwatch_hud()
+            except Exception:
+                pass
+    
+        return "Stopwatch closed."
+    
     if not app:
         return "Tell me which application or window to control."
-
+    
     window = _find_window(app)
     if window is None:
         return f'Could not find an open application/window matching "{app}".'
