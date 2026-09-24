@@ -225,9 +225,12 @@ check internet quality
 network diagnostics
 check network
 show network diagnostics
+start network monitor
+monitor my network
+stop network monitor
 ```
 
-The center HUD shows quality, latency, packet loss, DNS resolution, HTTPS reachability, and active interfaces. Recent checks are retained locally for history.
+The center HUD shows quality, latency, packet loss, DNS resolution, HTTPS reachability, and active interfaces. Recent checks are retained locally for history. The background monitor checks periodically and only surfaces a HUD alert when quality changes or degrades.
 
 ## Visual UI recognition
 
