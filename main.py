@@ -105,6 +105,7 @@ from actions.context_action_bubble import _handler as context_action_handler
 from core.execution_trace import start_session as trace_start_session, tool_start as trace_tool_start, tool_end as trace_tool_end
 from core.no_progress import NoProgressGuard
 from core.voice_profiles import active_voice
+from core.crash_detective import install_hooks as install_crash_detective_hooks
 from actions.notification_intelligence import should_interrupt
 
 # How long the assistant stays awake with no user speech before it auto-sleeps
@@ -634,6 +635,9 @@ _HUD_RESULT_TOOLS = {
     "voice_profiles",
     "notification_inbox",
     "notification_intelligence",
+    "crash_detective",
+    "network_quality",
+    "visual_ui",
 }
 
 
@@ -747,6 +751,18 @@ def _hud_result_payload(name: str, args: dict, result: str) -> tuple[str, str, b
     if name == "notification_intelligence":
         action = str(args.get("action", "summary") or "summary").upper()
         return f"NOTIFICATION INTELLIGENCE • {action}", text, False
+
+    if name == "crash_detective":
+        action = str(args.get("action", "latest") or "latest").upper()
+        return f"CRASH DETECTIVE • {action}", text, False
+
+    if name == "network_quality":
+        action = str(args.get("action", "snapshot") or "snapshot").upper()
+        return f"NETWORK • {action}", text, False
+
+    if name == "visual_ui":
+        action = str(args.get("action", "locate") or "locate").upper()
+        return f"VISUAL UI • {action}", text, False
 
     if name == "clipboard_manager":
         return "CLIPBOARD", text, False
@@ -1503,6 +1519,89 @@ class JarvisLive:
             self._run_local_action("local_ai_router", {"action": "set_mode", "mode": mode})
             self._run_local_action("local_ai_router", {"action": "enable"})
             self.ui.write_log(f"SYS: Local AI mode set to {mode}.")
+            return True
+
+        # Crash Detective: detailed report goes to the HUD, concise status is spoken.
+        if low in {
+            "show crash detective",
+            "show crash report",
+            "show latest crash report",
+            "latest crash report",
+            "crash report",
+        }:
+            result = self._run_local_action("crash_detective", {"action": "latest"})
+            self.ui.show_content("CRASH DETECTIVE • LATEST", result)
+            try:
+                from core.crash_detective import latest_report
+                report = latest_report() or {}
+                exc_type = str(report.get("exception_type", "") or "")
+                exc = str(report.get("exception", "") or "")
+                if exc_type:
+                    self.speak(
+                        f"Sir, the latest crash report is on the HUD. "
+                        f"The error was {exc_type}: {exc[:180]}."
+                    )
+                else:
+                    self.speak("Sir, the Crash Detective report is on the HUD. There are no recorded crashes." if "No JARVIS crash reports" in result else "Sir, the Crash Detective report is on the HUD.")
+            except Exception:
+                self.speak("Sir, the Crash Detective report is on the HUD.")
+            return True
+
+        # Network Quality Monitor: the complete diagnostic is shown on the HUD.
+        if low in {
+            "show network quality",
+            "check network quality",
+            "check internet quality",
+            "network diagnostics",
+            "check network",
+            "show network diagnostics",
+        }:
+            result = self._run_local_action("network_quality", {"action": "snapshot"})
+            self.ui.show_content("NETWORK • QUALITY", result)
+            try:
+                quality = _re.search(r"Quality:\s*([A-Z]+)", result)
+                latency = _re.search(r"average\s+([\d.]+)\s*ms", result)
+                loss = _re.search(r"Packet loss:\s*([\d.]+)%", result)
+                spoken = "Sir, network quality is shown on the HUD."
+                if quality:
+                    spoken = f"Sir, network quality is {quality.group(1).lower()}."
+                    if latency:
+                        spoken += f" Average latency is {latency.group(1)} milliseconds."
+                    if loss:
+                        spoken += f" Packet loss is {loss.group(1)} percent."
+                self.speak(spoken)
+            except Exception:
+                self.speak("Sir, the network quality report is on the HUD.")
+            return True
+
+        # Visual UI recognition: let the user describe an element naturally.
+        find_match = _re.fullmatch(r"(?:find|locate|recognize)\s+(.+?)\s+(?:on|in)\s+(?:the\s+)?screen", low)
+        if find_match:
+            description = find_match.group(1).strip()
+            result = self._run_local_action(
+                "visual_ui",
+                {"action": "locate", "description": description},
+            )
+            self.ui.show_content("VISUAL UI • LOCATE", result)
+            if "coordinates (" in result.lower():
+                self.speak(f"Sir, I found {description}.")
+            else:
+                self.speak(f"Sir, I couldn't find {description} on the screen.")
+            return True
+
+        click_match = _re.fullmatch(r"click\s+(.+?)\s+(?:on|in)\s+(?:the\s+)?screen", low)
+        if click_match:
+            description = click_match.group(1).strip()
+            result = self._run_local_action(
+                "visual_ui",
+                {"action": "click", "description": description},
+            )
+            self.ui.show_content("VISUAL UI • CLICK", result)
+            self.speak(
+                f"Sir, I clicked {description}."
+                if "Clicked" in result
+                else f"Sir, I couldn't click {description}."
+            )
             return True
 
         # Camera commands must be handled before generic "open <app>" matching.
@@ -3435,6 +3534,7 @@ class JarvisLive:
             await asyncio.sleep(delay)
 
 def main():
+    install_crash_detective_hooks(logger=lambda msg: print(msg))
     ui = JarvisUI("face.png")
 
     def runner():
