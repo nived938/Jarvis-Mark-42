@@ -256,3 +256,14 @@ close
 ```
 
 The map opens in the center HUD and supports address search plus nearby place-category searches.
+
+## Geoapify map location
+
+```text
+set my location
+where is my location
+where I am
+open map and search for Lulu Mall near me
+```
+
+After `set my location`, JARVIS enters click mode. Click the map at your actual location to save a local blue location marker. `where is my location` returns to that saved point without opening the weather HUD. Map searches update the existing map instead of reopening the HUD.
