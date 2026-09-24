@@ -628,6 +628,11 @@ _HUD_RESULT_TOOLS = {
     "screen_ocr",
     "scan_visual_code",
     "clipboard_manager",
+    "resource_manager",
+    "local_ai_router",
+    "voice_profiles",
+    "notification_inbox",
+    "notification_intelligence",
 }
 
 
@@ -714,6 +719,30 @@ def _hud_result_payload(name: str, args: dict, result: str) -> tuple[str, str, b
 
     if name == "scan_visual_code":
         return "SCANNED CODES", text, False
+
+    if name == "resource_manager":
+        action = str(args.get("action", "status") or "status").upper()
+        return f"RESOURCE • {action}", text, False
+
+    if name == "local_ai_router":
+        action = str(args.get("action", "status") or "status").lower()
+        if action in {"show", "picker", "models", "enable", "disable"}:
+            return None
+        if action == "set_model":
+            return None
+        return "LOCAL AI", text, False
+
+    if name == "voice_profiles":
+        action = str(args.get("action", "status") or "status").upper()
+        return f"VOICE • {action}", text, False
+
+    if name == "notification_inbox":
+        action = str(args.get("action", "list") or "list").upper()
+        return f"NOTIFICATIONS • {action}", text, False
+
+    if name == "notification_intelligence":
+        action = str(args.get("action", "summary") or "summary").upper()
+        return f"NOTIFICATION INTELLIGENCE • {action}", text, False
 
     if name == "clipboard_manager":
         return "CLIPBOARD", text, False
@@ -1264,7 +1293,20 @@ class JarvisLive:
             return True
 
         # HUD close controls stay local so they work even if Gemini is busy.
-        # A bare "close" only closes an active HUD; it can never shut down JARVIS.
+        # A generic close phrase only closes the active temporary HUD; it can
+        # never shut down JARVIS or close an unrelated Windows application.
+        hud_close_phrases = {
+            "close", "close it", "close that", "close this",
+            "hide", "hide it", "hide that", "hide this",
+            "dismiss", "dismiss it", "dismiss that", "dismiss this",
+            "exit", "exit it", "exit that", "exit this",
+            "go back", "return", "return to jarvis", "back to jarvis",
+        }
+        if self.ui.is_any_hud_open() and low in hud_close_phrases:
+            self.ui.close_active_hud()
+            self.ui.write_log("SYS: Active HUD closed.")
+            return True
+
         if (
             self.ui.is_weather_hud_open()
             and (
@@ -1280,11 +1322,50 @@ class JarvisLive:
             return True
 
         if self.ui.is_camera_hud_open() and low in (
-            "close", "close it", "close that", "hide", "hide it", "hide that",
             "close camera", "stop camera", "turn off camera",
         ):
             self.ui.stop_camera_stream()
             self.ui.write_log("SYS: Camera HUD closed.")
+            return True
+
+        # Local AI controls are kept local so the HUD picker is immediate.
+        if low in {
+            "show local ai",
+            "show local ai model",
+            "show local ai models",
+            "show ollama",
+            "show ollama models",
+            "open local ai",
+            "local ai picker",
+        }:
+            self._run_local_action("local_ai_router", {"action": "show"})
+            return True
+
+        if low in {
+            "enable local ai",
+            "turn on local ai",
+            "use local ai",
+        }:
+            self._run_local_action("local_ai_router", {"action": "enable"})
+            return True
+
+        if low in {
+            "disable local ai",
+            "turn off local ai",
+        }:
+            self._run_local_action("local_ai_router", {"action": "disable"})
+            return True
+
+        smart_match = _re.fullmatch(
+            r"(?:use|set) local ai(?: in)?\s+(fast|balanced|smart|vision)\s+mode",
+            low,
+        )
+        if smart_match:
+            mode = smart_match.group(1)
+            self._run_local_action("local_ai_router", {"action": "enable"})
+            self._run_local_action("local_ai_router", {"action": "set_mode", "mode": mode})
+            self.ui.write_log(f"SYS: Local AI mode set to {mode}.")
+            self.ui.show_local_ai_picker()
             return True
 
         # Camera commands must be handled before generic "open <app>" matching.
