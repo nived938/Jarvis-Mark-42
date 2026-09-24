@@ -1699,14 +1699,43 @@ class JarvisLive:
             start = road_distance_match.group(1).strip()
             end = road_distance_match.group(2).strip()
             try:
+                from core.geoapify_maps import route_between_places
+
+                route_info = route_between_places(start, end)
                 self.ui.show_geoapify_route(start, end)
                 self.ui.write_log(
                     f"SYS: Geoapify road route — {start} → {end}"
                 )
-                self.speak(
-                    f"Sir, I am calculating the road route from {start} to {end} "
-                    "and showing it on the map."
-                )
+
+                distance_m = route_info.get("distance_m")
+                time_s = route_info.get("time_s")
+                if distance_m is not None:
+                    distance_text = (
+                        f"{float(distance_m) / 1000:.1f} kilometres"
+                        if float(distance_m) >= 1000
+                        else f"{round(float(distance_m))} metres"
+                    )
+                else:
+                    distance_text = "the route distance"
+                if time_s is not None:
+                    total_minutes = max(0, round(float(time_s) / 60))
+                    if total_minutes >= 60:
+                        time_text = (
+                            f"{total_minutes // 60} hours "
+                            f"{total_minutes % 60} minutes"
+                        )
+                    else:
+                        time_text = f"{total_minutes} minutes"
+                    self.speak(
+                        f"Sir, the road distance from {start} to {end} is "
+                        f"{distance_text}, with an estimated driving time of "
+                        f"{time_text}. I have plotted the route on the map."
+                    )
+                else:
+                    self.speak(
+                        f"Sir, the road distance from {start} to {end} is "
+                        f"{distance_text}. I have plotted the route on the map."
+                    )
             except Exception as exc:
                 self.ui.write_log(f"ERR: Geoapify road route failed — {exc}")
                 self.speak("Sir, I couldn't calculate that road route.")
