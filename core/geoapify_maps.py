@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,6 +17,9 @@ LOCATION_FILE = BASE_DIR / "memory" / "geoapify_map_location.json"
 _TIMEOUT = 12.0
 _LEAFLET_CSS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
 _LEAFLET_JS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+_ROUTE_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+_ROUTE_CACHE_LOCK = threading.Lock()
+_ROUTE_CACHE_TTL = 30.0
 
 _CATEGORY_MAP = {
     "restaurant": "catering.restaurant",
@@ -185,6 +189,16 @@ def route_between_places(start_text: str, end_text: str) -> dict[str, Any]:
     if not start_text or not end_text:
         raise ValueError("Both route locations are required.")
 
+    cache_key = (
+        re.sub(r"\s+", " ", start_text.lower()).strip(),
+        re.sub(r"\s+", " ", end_text.lower()).strip(),
+    )
+    now = time.monotonic()
+    with _ROUTE_CACHE_LOCK:
+        cached = _ROUTE_CACHE.get(cache_key)
+        if cached and now - cached[0] < _ROUTE_CACHE_TTL:
+            return cached[1]
+
     bias = saved_location()
     bias_lat = bias_lon = None
     if bias:
@@ -246,13 +260,19 @@ def route_between_places(start_text: str, end_text: str) -> dict[str, Any]:
         if distance_m is not None and time_s is not None:
             break
 
-    return {
+    result = {
         "route": route_payload,
         "from": start,
         "to": end,
         "distance_m": distance_m,
         "time_s": time_s,
     }
+    with _ROUTE_CACHE_LOCK:
+        _ROUTE_CACHE[cache_key] = (time.monotonic(), result)
+        if len(_ROUTE_CACHE) > 8:
+            oldest = min(_ROUTE_CACHE.items(), key=lambda item: item[1][0])[0]
+            _ROUTE_CACHE.pop(oldest, None)
+    return result
 
 def _category_for_query(query: str) -> str | None:
     low = re.sub(r"\s+", " ", str(query or "").strip().lower())
