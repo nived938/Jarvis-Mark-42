@@ -153,6 +153,8 @@ Monitoring services are designed to avoid producing repetitive activity-log nois
 - battery and storage inspection
 - live scrcpy cast embedded directly in the JARVIS HUD
 - direct mouse and keyboard control of the phone from the embedded HUD
+- Android UI hierarchy inspection through ADB
+- natural visible-control clicking by text, content-description, or resource ID
 - optional Android audio forwarding through scrcpy
 - no companion app installed on the Android device
 
