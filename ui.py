@@ -5365,17 +5365,25 @@ class MainWindow(QMainWindow):
             area = target.availableGeometry()
             self_screen = self.screen()
             current = self_screen if self_screen in screens else None
+            was_fullscreen = self.isFullScreen()
+            was_maximized = self.isMaximized()
 
             # Preserve the current size, but keep it completely inside the
-            # destination monitor's usable work area.
+            # destination monitor's usable work area. Qt requires a normal
+            # window for setGeometry(), so restore temporarily and then restore
+            # the previous maximized/fullscreen state.
             width = min(self.width(), area.width())
             height = min(self.height(), area.height())
             x = area.left() + max(0, (area.width() - width) // 2)
             y = area.top() + max(0, (area.height() - height) // 2)
 
-            if self.isFullScreen():
+            if was_fullscreen or was_maximized:
                 self.showNormal()
             self.setGeometry(x, y, width, height)
+            if was_fullscreen:
+                self.showFullScreen()
+            elif was_maximized:
+                self.showMaximized()
             self.activateWindow()
             self.raise_()
 
