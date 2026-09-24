@@ -24,6 +24,7 @@ _CATEGORY_MAP = {
     "cafes": "catering.cafe",
     "coffee": "catering.cafe.coffee_shop",
     "coffee shop": "catering.cafe.coffee_shop",
+    "coffee shops": "catering.cafe.coffee_shop",
     "hospital": "healthcare.hospital",
     "hospitals": "healthcare.hospital",
     "pharmacy": "healthcare.pharmacy",
@@ -122,14 +123,24 @@ def geocode(
             continue
     return out
 
-def places(category: str, lat: float, lon: float, limit: int = 20, radius: int = 5000) -> list[dict[str, Any]]:
-    params = urllib.parse.urlencode({
+def places(
+    category: str,
+    lat: float,
+    lon: float,
+    limit: int = 20,
+    radius: int = 5000,
+    name: str | None = None,
+) -> list[dict[str, Any]]:
+    params_dict: dict[str, Any] = {
         "categories": category,
         "bias": f"proximity:{lon},{lat}",
         "filter": f"circle:{lon},{lat},{max(100, int(radius))}",
         "limit": max(1, min(limit, 50)),
         "apiKey": _api_key(),
-    })
+    }
+    if name:
+        params_dict["name"] = str(name).strip()
+    params = urllib.parse.urlencode(params_dict)
     payload = _request_json(f"https://api.geoapify.com/v2/places?{params}")
     out = []
     for feature in payload.get("features", []) or []:
@@ -261,7 +272,13 @@ def search(query: str, lat: float, lon: float) -> dict[str, Any]:
         return {
             "kind": "places",
             "query": text,
-            "results": places(category, lat, lon, radius=20000 if near_me else 5000),
+            "results": places(
+                category,
+                lat,
+                lon,
+                radius=100000 if near_me else 50000,
+                name=cleaned or None,
+            ),
         }
 
     cleaned = re.sub(r"\bnear\s+me\b|\baround\s+me\b|\bclose\s+to\s+me\b", " ", text, flags=re.IGNORECASE)
@@ -316,6 +333,7 @@ function loadSavedLocation(){
       if(p.saved && Number.isFinite(p.lat) && Number.isFinite(p.lon)){
         const label=[p.city,p.region,p.country].filter(Boolean).join(', ') || 'Saved map location';
         putMyLocation(p.lat,p.lon,label);
+        map.setView([p.lat,p.lon],13,{animate:false});
       }
     })
     .catch(()=>{});
@@ -341,7 +359,6 @@ function showResults(p){
     // Text/address searches can return candidates spread across a country.
     // Focus the map on the best result instead of zooming all the way out.
     map.setView([rows[0].lat,rows[0].lon],15,{animate:true});
-    map.openPopup();
   }
 
   status.textContent=(p.kind==='places'?'PLACES':'SEARCH')+' • '+rows.length+' RESULT(S)';
