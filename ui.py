@@ -4333,12 +4333,6 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    def start_countdown_timer(self, seconds: float, title: str = "TIMER") -> None:
-        try:
-            self._win.start_countdown_timer(float(seconds), str(title or "TIMER"))
-        except Exception:
-            pass
-
     def cancel_countdown_timer(self) -> None:
         try:
             self._win.cancel_countdown_timer()
