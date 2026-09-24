@@ -149,3 +149,7 @@ Quiet mode suppresses ordinary/important notification interruptions for a chosen
 ```
 
 `local_ai_model` is the preferred installed Ollama model selected from the JARVIS HUD picker. `local_ai_mode` controls automatic routing when no explicit mode is supplied. Supported modes are `fast`, `balanced`, `smart`, and `vision`.
+
+## Geoapify Maps
+
+JARVIS uses Geoapify for the embedded map HUD, forward geocoding, nearby Places searches, and routing. Keep the key only in `config/api_keys.json` under `geoapify_api_key` and never commit the real credential.
