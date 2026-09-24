@@ -62,3 +62,10 @@ The project is moving toward a more modular desktop-automation platform where `m
 - Network Quality Monitor with latency, packet loss, DNS, HTTPS, and local history
 - Visual UI object recognition action built on the existing screen-vision pipeline
 - local commands for crash reports, network checks, and visual UI locate/click operations
+
+### Google Maps
+
+- Google Maps JavaScript + Places HUD
+- local API-key configuration without committing the credential
+- place search, autocomplete, markers, and place details through the configured Places library
+- natural-language Maps voice commands
