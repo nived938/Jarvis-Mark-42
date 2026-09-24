@@ -130,9 +130,3 @@ Do not add a feature to documentation as completed until it exists in source con
 - Visual UI object recognition
 
 These source changes are present on the mark-43-context-automation branch. Crash and network results are designed for the center HUD and should receive local Windows runtime validation before being treated as fully verified.
-
-### Google Maps
-
-- Google Maps JavaScript + Places foundation implemented
-- Places search/autocomplete/place-details HUD implemented
-- Routes, Street View, and other Maps services remain intentionally out of scope until the configured key is verified to support them
