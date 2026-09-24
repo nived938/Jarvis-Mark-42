@@ -57,4 +57,4 @@ screenshots/
 # Local secrets
 config/api_keys.json
 config/certs/*.key
-
+memory/geoapify_map_location.json
