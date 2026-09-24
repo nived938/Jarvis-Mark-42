@@ -396,6 +396,7 @@ html,body,#map{width:100%%;height:100%%;margin:0;background:#061018}
 const map=L.map('map').setView([20,78],5);
 L.tileLayer('/tiles/carto/{z}/{x}/{y}.png',{maxZoom:19,attribution:'Powered by <a href="https://www.geoapify.com/" target="_blank">Geoapify</a> | © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>'}).addTo(map);
 const markers=L.layerGroup().addTo(map);
+const routeMarkers=L.layerGroup().addTo(map);
 let myLocationMarker=null;
 let setLocationMode=false;
 let routeLayer=null;
@@ -485,7 +486,49 @@ async function locateUser(){
   }
 }
 async function searchMap(q){if(!q)return;status.textContent='SEARCHING…';const c=map.getCenter();try{const r=await fetch('/api/search?'+new URLSearchParams({q,lat:c.lat,lon:c.lng}));const p=await r.json();if(!r.ok)throw Error(p.error||'Search failed');showResults(p);}catch(e){status.textContent='ERROR: '+e.message;}}
+function routeSummary(distanceM,timeS){
+  const km=Number(distanceM||0)/1000;
+  const min=Math.max(0,Number(timeS||0))/60;
+  const d=km>=1?km.toFixed(1)+' km':Math.round(Number(distanceM||0))+' m';
+  const t=min>=60?Math.floor(min/60)+' h '+Math.round(min%60)+' min':Math.round(min)+' min';
+  return d+' • '+t;
+}
 async function routeTo(q){status.textContent='FINDING DESTINATION…';try{const c=map.getCenter();const g=await fetch('/api/geocode?'+new URLSearchParams({text:q}));const gp=await g.json();if(!g.ok||!(gp.results||[]).length)throw Error('Destination not found');const d=gp.results[0];const r=await fetch('/api/route?'+new URLSearchParams({slat:c.lat,slon:c.lng,elat:d.lat,elon:d.lon,mode:'drive'}));const p=await r.json();if(!r.ok)throw Error(p.error||'Route failed');if(routeLayer)map.removeLayer(routeLayer);routeLayer=L.geoJSON(p,{style:{color:'#00d4ff',weight:5,opacity:.85}}).addTo(map);map.fitBounds(routeLayer.getBounds(),{padding:[30,30]});status.textContent='ROUTE • DRIVE';}catch(e){status.textContent='ROUTE ERROR: '+e.message;}}
+async function routeBetween(fromText,toText){
+  status.textContent='CALCULATING ROAD ROUTE…';
+  try{
+    markers.clearLayers();
+    routeMarkers.clearLayers();
+    if(routeLayer){map.removeLayer(routeLayer);routeLayer=null;}
+    const r=await fetch('/api/route-between?'+new URLSearchParams({from:fromText,to:toText}));
+    const p=await r.json();
+    if(!r.ok)throw Error(p.error||'Route failed');
+    if(!p.route)throw Error('No route geometry returned');
+
+    const a=L.circleMarker([p.from.lat,p.from.lon],{
+      radius:8,color:'#00d4ff',weight:3,fillColor:'#00d4ff',fillOpacity:.75
+    }).addTo(routeMarkers);
+    const b=L.circleMarker([p.to.lat,p.to.lon],{
+      radius:8,color:'#ff9f1c',weight:3,fillColor:'#ff9f1c',fillOpacity:.75
+    }).addTo(routeMarkers);
+
+    a.bindPopup('<b>START</b><br>'+esc(p.from.name||fromText)+'<br>'+esc(p.from.formatted||''));
+    b.bindPopup('<b>DESTINATION</b><br>'+esc(p.to.name||toText)+'<br>'+esc(p.to.formatted||''));
+
+    routeLayer=L.geoJSON(p.route,{
+      style:{color:'#00d4ff',weight:6,opacity:.9}
+    }).addTo(map);
+
+    const bounds=L.latLngBounds([[p.from.lat,p.from.lon],[p.to.lat,p.to.lon]]);
+    if(routeLayer.getBounds().isValid())bounds.extend(routeLayer.getBounds());
+    map.fitBounds(bounds,{padding:[55,55],maxZoom:14,animate:true});
+
+    status.textContent='ROAD ROUTE • '+routeSummary(p.distance_m,p.time_s);
+    a.openPopup();
+  }catch(e){
+    status.textContent='ROUTE ERROR: '+e.message;
+  }
+}
 loadSavedLocation();
 const initialQuery=new URLSearchParams(location.search).get('q')||'';
 if(initialQuery)searchMap(initialQuery);
@@ -541,6 +584,12 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(200,search((q.get("q") or [""])[0],float((q.get("lat") or ["20"])[0]),float((q.get("lon") or ["78"])[0]))); return
             if path=="/api/route":
                 self._json(200,route(float((q.get("slat") or ["0"])[0]),float((q.get("slon") or ["0"])[0]),float((q.get("elat") or ["0"])[0]),float((q.get("elon") or ["0"])[0]),str((q.get("mode") or ["drive"])[0]))); return
+            if path=="/api/route-between":
+                start_text = (q.get("from") or [""])[0]
+                end_text = (q.get("to") or [""])[0]
+                result = route_between_places(start_text, end_text)
+                self._json(200, result)
+                return
             if path=="/api/route-between":
                 start_text = (q.get("from") or [""])[0]
                 end_text = (q.get("to") or [""])[0]
