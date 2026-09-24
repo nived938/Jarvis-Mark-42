@@ -3971,31 +3971,6 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    def show_local_ai_picker(self) -> None:
-        """Thread-safe: load and show the Local AI model picker."""
-        try:
-            self._win.show_local_ai_picker()
-        except Exception:
-            pass
-
-    def is_local_ai_hud_open(self) -> bool:
-        try:
-            return bool(self._win.is_local_ai_hud_open())
-        except Exception:
-            return False
-
-    def is_any_hud_open(self) -> bool:
-        try:
-            return bool(self._win.is_any_hud_open())
-        except Exception:
-            return False
-
-    def close_active_hud(self) -> None:
-        try:
-            self._win.close_active_hud()
-        except Exception:
-            pass
-
     def is_weather_hud_open(self) -> bool:
         try:
             return self._hud_cam_stack.currentIndex() == 2 and self._weather_view.isVisible()
@@ -6458,6 +6433,32 @@ class JarvisUI:
             return bool(self._win.is_camera_hud_open())
         except Exception:
             return False
+
+    def show_local_ai_picker(self) -> None:
+        """Thread-safe: load and show the Local AI model picker."""
+        try:
+            self._win.show_local_ai_picker()
+        except Exception:
+            pass
+
+    def is_local_ai_hud_open(self) -> bool:
+        try:
+            return bool(self._win.is_local_ai_hud_open())
+        except Exception:
+            return False
+
+    def is_any_hud_open(self) -> bool:
+        try:
+            return bool(self._win.is_any_hud_open())
+        except Exception:
+            return False
+
+    def close_active_hud(self) -> None:
+        """Thread-safe: close whichever temporary center HUD is active."""
+        try:
+            self._win.close_active_hud()
+        except Exception:
+            pass
 
     def set_emergency_active(self, active: bool) -> None:
         """Thread-safe: reflect the emergency-stop latch in the HUD."""
