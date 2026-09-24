@@ -1,7 +1,8 @@
-"""Local Google Maps JavaScript + Places bridge for JARVIS.
+"""Local Google Maps JavaScript + Places (New) bridge for JARVIS.
 
 The API key is read only from config/api_keys.json at runtime and is never
-hardcoded into the repository.
+hardcoded into the repository. The page uses Google's current Place and
+PlaceAutocompleteElement APIs.
 """
 from __future__ import annotations
 
@@ -31,189 +32,267 @@ def get_google_maps_api_key() -> str:
     return str(_load_config().get("google_maps_api_key") or "").strip()
 
 
-def _escape_js(value: str) -> str:
-    return (
-        str(value or "")
-        .replace("\\", "\\\\")
-        .replace(chr(96), "\\\\" + chr(96))
-        .replace("</", "<\\/")
-    )
-
-
 def _html(api_key: str) -> str:
-    key = _escape_js(api_key)
-    return f"""<!doctype html>
+    # API keys normally contain URL-safe characters. Escape the ampersand
+    # context so the value cannot terminate the loader URL.
+    safe_key = quote(str(api_key or "").strip(), safe="-_.~")
+    return """<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>JARVIS Maps</title>
 <style>
-html,body,#map{{height:100%;width:100%;margin:0;background:#00060a;overflow:hidden}}
-#status{{position:fixed;left:12px;bottom:12px;z-index:5;padding:7px 10px;
-  font:12px Consolas,monospace;color:#8ffcff;background:rgba(0,6,10,.88);
-  border:1px solid #0d3347;border-radius:5px}}
-#details{{position:fixed;right:12px;top:12px;z-index:5;max-width:340px;
+html,body,#map{height:100%;width:100%;margin:0;background:#00060a;overflow:hidden}
+#status{position:fixed;left:12px;bottom:12px;z-index:20;padding:7px 10px;
+  font:12px Consolas,monospace;color:#8ffcff;background:rgba(0,6,10,.90);
+  border:1px solid #0d3347;border-radius:5px}
+#details{position:fixed;right:12px;top:12px;z-index:20;max-width:360px;
   display:none;padding:12px 14px;font:12px Consolas,monospace;color:#8ffcff;
   background:rgba(0,6,10,.94);border:1px solid #0d3347;border-radius:7px;
-  box-shadow:0 8px 30px rgba(0,0,0,.45)}}
-#details b{{color:#d8f8ff}}
-a{{color:#00d4ff}}
+  box-shadow:0 8px 30px rgba(0,0,0,.45)}
+#details b{color:#d8f8ff}
+#search{position:fixed;left:12px;top:12px;z-index:20;width:330px}
+#search gmp-place-autocomplete{width:100%}
+#search gmp-place-autocomplete input{width:100%}
 </style>
 </head>
 <body>
 <div id="map"></div>
+<div id="search"></div>
 <div id="details"></div>
 <div id="status">JARVIS MAPS • loading Google Maps…</div>
+
 <script>
 let map = null;
-let service = null;
-let autocomplete = null;
+let Place = null;
+let markersLib = null;
 let markers = [];
 
-function setStatus(text) {{
+const DETAIL_FIELDS = [
+  "displayName",
+  "formattedAddress",
+  "internationalPhoneNumber",
+  "rating",
+  "regularOpeningHours",
+  "websiteURI",
+  "googleMapsURI",
+  "location"
+];
+
+function setStatus(text) {
   const node = document.getElementById("status");
-  if (node) node.textContent = text;
-}}
+  if (node) node.textContent = String(text || "");
+}
 
-function escapeHtml(value) {{
-  return String(value ?? "").replace(/[&<>"']/g, c => ({{
-    "&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;","'":"&#039;"
-  }}[c]));
-}}
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, function(c) {
+    return ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#039;"
+    })[c];
+  });
+}
 
-function clearMarkers() {{
-  for (const marker of markers) marker.setMap(null);
+function clearMarkers() {
+  for (const marker of markers) {
+    try { marker.map = null; } catch (_) {}
+  }
   markers = [];
-}}
+}
 
-function showDetails(place) {{
+async function showPlace(place) {
+  if (!place) return;
+
+  try {
+    await place.fetchFields({fields: DETAIL_FIELDS});
+  } catch (_) {
+    // Search results may already contain some fields; keep going.
+  }
+
   const details = document.getElementById("details");
-  const name = escapeHtml(place.name || "Unknown place");
-  const address = escapeHtml(place.formatted_address || "");
-  const phone = escapeHtml(place.formatted_phone_number || "");
+  const name = escapeHtml(place.displayName || "Unknown place");
+  const address = escapeHtml(place.formattedAddress || "");
+  const phone = escapeHtml(place.internationalPhoneNumber || "");
   const rating = place.rating ? "★ " + escapeHtml(place.rating) : "";
+
   let open = "";
-  if (place.opening_hours && typeof place.opening_hours.isOpen === "function") {{
-    open = place.opening_hours.isOpen() ? "OPEN" : "CLOSED";
-  }}
+  try {
+    if (place.regularOpeningHours &&
+        typeof place.regularOpeningHours.isOpen === "function") {
+      const isOpen = await place.regularOpeningHours.isOpen();
+      if (isOpen === true) open = "OPEN";
+      else if (isOpen === false) open = "CLOSED";
+    }
+  } catch (_) {}
+
   let html = "<b>" + name + "</b>";
   if (address) html += "<br>" + address;
-  if (rating || open) html += "<br>" + [rating, open].filter(Boolean).join(" • ");
+  if (rating || open) {
+    html += "<br>" + [rating, open].filter(Boolean).join(" • ");
+  }
   if (phone) html += "<br>" + phone;
-  if (place.website) {{
+  if (place.websiteURI) {
     html += '<br><a target="_blank" rel="noopener" href="' +
-      escapeHtml(place.website) + '">Website</a>';
-  }}
+      escapeHtml(place.websiteURI) + '">Website</a>';
+  }
+  if (place.googleMapsURI) {
+    html += '<br><a target="_blank" rel="noopener" href="' +
+      escapeHtml(place.googleMapsURI) + '">Open in Google Maps</a>';
+  }
+
   details.innerHTML = html;
   details.style.display = "block";
-}}
 
-function fetchDetails(placeId) {{
-  if (!service || !placeId) return;
-  service.getDetails({{
-    placeId,
-    fields: [
-      "name","formatted_address","formatted_phone_number",
-      "opening_hours","rating","website","geometry"
-    ]
-  }}, (place, status) => {{
-    if (status === google.maps.places.PlacesServiceStatus.OK && place) {{
-      showDetails(place);
-      if (place.geometry && place.geometry.location) {{
-        map.panTo(place.geometry.location);
-        map.setZoom(Math.max(14, map.getZoom() || 14));
-      }}
-    }}
-  }});
-}}
+  if (place.location) {
+    map.panTo(place.location);
+    map.setZoom(Math.max(14, map.getZoom() || 14));
+  }
+}
 
-function addResult(place, index) {{
-  if (!place.geometry || !place.geometry.location) return;
-  const marker = new google.maps.Marker({{
-    map,
-    position: place.geometry.location,
-    title: place.name || ("Place " + (index + 1))
-  }});
-  marker.addListener("click", () => fetchDetails(place.place_id));
+function addMarker(place, index) {
+  if (!place || !place.location || !markersLib) return;
+
+  const marker = new markersLib.AdvancedMarkerElement({
+    map: map,
+    position: place.location,
+    title: place.displayName || ("Place " + (index + 1))
+  });
+
+  marker.addEventListener("gmp-click", function() {
+    showPlace(place);
+  });
+
   markers.push(marker);
-}}
+}
 
-function jarvisSearch(query) {{
+async function jarvisSearch(query) {
   query = String(query || "").trim();
-  if (!query || !service) {{
-    if (!query) setStatus("JARVIS MAPS • enter a place to search");
+
+  if (!query) {
+    setStatus("JARVIS MAPS • enter a place to search");
     return;
-  }}
+  }
+
+  if (!Place || !map) {
+    setStatus("JARVIS MAPS • Places API is not ready");
+    return;
+  }
+
   document.getElementById("details").style.display = "none";
   setStatus("JARVIS MAPS • searching: " + query);
   clearMarkers();
 
-  service.textSearch({{ query }}, (results, status) => {{
-    if (status !== google.maps.places.PlacesServiceStatus.OK || !results || !results.length) {{
+  try {
+    const result = await Place.searchByText({
+      textQuery: query,
+      fields: DETAIL_FIELDS,
+      maxResultCount: 12
+    });
+
+    const results = Array.isArray(result.places) ? result.places : [];
+
+    if (!results.length) {
       setStatus("JARVIS MAPS • no places found");
       return;
-    }}
+    }
+
     const bounds = new google.maps.LatLngBounds();
-    results.slice(0, 12).forEach((place, index) => {{
-      addResult(place, index);
-      if (place.geometry && place.geometry.location) bounds.extend(place.geometry.location);
-    }});
-    map.fitBounds(bounds);
-    if (results.length === 1 && results[0].place_id) fetchDetails(results[0].place_id);
-    setStatus("JARVIS MAPS • " + Math.min(results.length, 12) + " results");
-  }});
-}}
 
-function initMap() {{
-  map = new google.maps.Map(document.getElementById("map"), {{
-    center: {{lat: 20, lng: 0}},
-    zoom: 2,
-    mapTypeControl: true,
-    streetViewControl: false,
-    fullscreenControl: false
-  }});
-  service = new google.maps.places.PlacesService(map);
+    results.forEach(function(place, index) {
+      addMarker(place, index);
+      if (place.location) bounds.extend(place.location);
+    });
 
-  const box = document.createElement("input");
-  box.type = "text";
-  box.placeholder = "Search places…";
-  box.style.cssText =
-    "position:absolute;top:12px;left:12px;z-index:4;width:300px;" +
-    "padding:10px 12px;border:1px solid #0d3347;border-radius:6px;" +
-    "background:#010d14;color:#8ffcff;font:13px Consolas,monospace;outline:none;";
-  document.body.appendChild(box);
+    if (results.length > 1) {
+      map.fitBounds(bounds);
+    } else if (results[0].location) {
+      map.panTo(results[0].location);
+      map.setZoom(15);
+    }
 
-  try {{
-    autocomplete = new google.maps.places.Autocomplete(box);
-    autocomplete.addListener("place_changed", () => {{
-      const place = autocomplete.getPlace();
-      if (place && place.place_id) fetchDetails(place.place_id);
-      if (place && place.geometry && place.geometry.location) {{
-        map.panTo(place.geometry.location);
-        map.setZoom(15);
-      }}
-    }});
-  }} catch (_) {{}}
+    if (results.length === 1) {
+      await showPlace(results[0]);
+    }
 
-  window.jarvisSearch = jarvisSearch;
-  window.jarvisReady = true;
-  setStatus("JARVIS MAPS • ready");
-  const params = new URLSearchParams(window.location.search);
-  const initial = params.get("q");
-  if (initial) {{
-    box.value = initial;
-    jarvisSearch(initial);
-  }}
-}}
+    setStatus("JARVIS MAPS • " + results.length + " result(s)");
+  } catch (error) {
+    console.error("[JARVIS MAPS] Place.searchByText failed:", error);
+    setStatus("JARVIS MAPS • Places API error");
+  }
+}
+
+async function initMap() {
+  try {
+    const mapsLib = await google.maps.importLibrary("maps");
+    const placesLib = await google.maps.importLibrary("places");
+    markersLib = await google.maps.importLibrary("marker");
+
+    const MapClass = mapsLib.Map;
+    Place = placesLib.Place;
+    const PlaceAutocompleteElement = placesLib.PlaceAutocompleteElement;
+
+    map = new MapClass(document.getElementById("map"), {
+      center: {lat: 20, lng: 0},
+      zoom: 2,
+      mapTypeControl: true,
+      streetViewControl: false,
+      fullscreenControl: false,
+      mapId: "DEMO_MAP_ID"
+    });
+
+    const autocomplete = new PlaceAutocompleteElement();
+    autocomplete.placeholder = "Search places…";
+    document.getElementById("search").appendChild(autocomplete);
+
+    autocomplete.addEventListener("gmp-select", async function(event) {
+      try {
+        const prediction = event.placePrediction;
+        if (!prediction) return;
+        const place = prediction.toPlace();
+        await showPlace(place);
+      } catch (error) {
+        console.error("[JARVIS MAPS] Autocomplete selection failed:", error);
+        setStatus("JARVIS MAPS • place selection error");
+      }
+    });
+
+    autocomplete.addEventListener("gmp-error", function() {
+      setStatus("JARVIS MAPS • autocomplete unavailable");
+    });
+
+    window.jarvisSearch = jarvisSearch;
+    window.jarvisReady = true;
+    setStatus("JARVIS MAPS • ready");
+
+    const params = new URLSearchParams(window.location.search);
+    const initial = params.get("q");
+    if (initial) {
+      await jarvisSearch(initial);
+    }
+  } catch (error) {
+    console.error("[JARVIS MAPS] initialization failed:", error);
+    setStatus("JARVIS MAPS • initialization/API error");
+  }
+}
 
 window.jarvisSearch = jarvisSearch;
+window.setTimeout(function() {
+  if (!window.jarvisReady) {
+    setStatus("JARVIS MAPS • Google API quota/key error");
+  }
+}, 10000);
 </script>
+
 <script async
-  src="https://maps.googleapis.com/maps/api/js?key={key}&libraries=places&loading=async&callback=initMap">
+  src="https://maps.googleapis.com/maps/api/js?key=__API_KEY__&loading=async&libraries=places&callback=initMap">
 </script>
 </body>
-</html>"""
+</html>
+""".replace("__API_KEY__", safe_key)
 
 
 class _Handler(BaseHTTPRequestHandler):
