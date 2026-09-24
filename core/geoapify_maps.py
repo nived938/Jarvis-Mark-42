@@ -127,6 +127,78 @@ def geocode(
             continue
     return out
 
+def reverse_geocode(lat: float, lon: float, limit: int = 1) -> list[dict[str, Any]]:
+    """Resolve clicked coordinates to a human-readable address."""
+    params = urllib.parse.urlencode({
+        "lat": float(lat),
+        "lon": float(lon),
+        "limit": max(1, min(int(limit), 5)),
+        "format": "json",
+        "apiKey": _api_key(),
+    })
+    payload = _request_json(f"https://api.geoapify.com/v1/geocode/reverse?{params}")
+    out = []
+    for item in payload.get("results", []) or []:
+        try:
+            out.append({
+                "name": item.get("name") or item.get("formatted") or "Location",
+                "formatted": item.get("formatted") or "",
+                "lat": float(item["lat"]),
+                "lon": float(item["lon"]),
+                "city": item.get("city") or "",
+                "state": item.get("state") or "",
+                "country": item.get("country") or "",
+                "postcode": item.get("postcode") or "",
+                "place_id": item.get("place_id"),
+            })
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def autocomplete(text: str, limit: int = 8) -> list[dict[str, Any]]:
+    """Return Geoapify autocomplete suggestions for map search."""
+    text = str(text or "").strip()
+    if not text:
+        return []
+    params = urllib.parse.urlencode({
+        "text": text,
+        "limit": max(1, min(int(limit), 10)),
+        "format": "json",
+        "apiKey": _api_key(),
+    })
+    payload = _request_json(f"https://api.geoapify.com/v1/geocode/autocomplete?{params}")
+    out = []
+    for item in payload.get("results", []) or []:
+        try:
+            out.append({
+                "name": item.get("name") or item.get("formatted") or "Location",
+                "formatted": item.get("formatted") or "",
+                "lat": float(item["lat"]),
+                "lon": float(item["lon"]),
+                "place_id": item.get("place_id"),
+            })
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def place_details(place_id: str = "", lat: float | None = None, lon: float | None = None) -> dict[str, Any]:
+    """Fetch additional Geoapify place details and geometry."""
+    params: dict[str, Any] = {"apiKey": _api_key()}
+    if place_id:
+        params["id"] = str(place_id)
+    elif lat is not None and lon is not None:
+        params["lat"] = float(lat)
+        params["lon"] = float(lon)
+    else:
+        raise ValueError("A Geoapify place_id or coordinates are required.")
+    payload = _request_json(
+        f"https://api.geoapify.com/v2/place-details?{urllib.parse.urlencode(params)}"
+    )
+    return payload if isinstance(payload, dict) else {}
+
+
 def places(
     category: str,
     lat: float,
@@ -358,20 +430,37 @@ def search(query: str, lat: float, lon: float) -> dict[str, Any]:
             pass
 
     category = _category_for_query(text)
+    cleaned = re.sub(
+        r"\bnear\s+me\b|\baround\s+me\b|\bclose\s+to\s+me\b",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    for key in sorted(_CATEGORY_MAP, key=len, reverse=True):
+        cleaned = re.sub(rf"\b{re.escape(key)}\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+    # Named places should go through forward geocoding first. This is important
+    # for queries such as "Lulu Mall": treating "mall" only as a category can
+    # make the Places API search for the token "lulu" in an arbitrary radius and
+    # miss the actual named POI.
+    if text and (not category or cleaned):
+        exact = geocode(
+            text,
+            limit=8,
+            bias_lat=lat,
+            bias_lon=lon,
+            radius_m=100000 if near_me else None,
+        )
+        if exact:
+            return {
+                "kind": "geocode",
+                "query": text,
+                "results": exact,
+                "near_me": near_me,
+            }
+
     if category:
-        cleaned = re.sub(r"\b(near|around|at|in|me)\b", " ", text, flags=re.IGNORECASE)
-        for key in sorted(_CATEGORY_MAP, key=len, reverse=True):
-            cleaned = re.sub(rf"\b{re.escape(key)}\b", " ", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        if cleaned and not near_me:
-            hit = geocode(
-                cleaned,
-                limit=1,
-                bias_lat=lat,
-                bias_lon=lon,
-            )
-            if hit:
-                lat, lon = hit[0]["lat"], hit[0]["lon"]
         return {
             "kind": "places",
             "query": text,
@@ -382,21 +471,19 @@ def search(query: str, lat: float, lon: float) -> dict[str, Any]:
                 radius=100000 if near_me else 50000,
                 name=cleaned or None,
             ),
+            "near_me": near_me,
         }
 
-    cleaned = re.sub(r"\bnear\s+me\b|\baround\s+me\b|\bclose\s+to\s+me\b", " ", text, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip() or text
-    results = geocode(
-        cleaned,
-        limit=5,
-        bias_lat=lat,
-        bias_lon=lon,
-        radius_m=100000 if near_me else None,
-    )
     return {
         "kind": "geocode",
         "query": text,
-        "results": results,
+        "results": geocode(
+            cleaned or text,
+            limit=8,
+            bias_lat=lat,
+            bias_lon=lon,
+            radius_m=100000 if near_me else None,
+        ),
         "near_me": near_me,
     }
 
@@ -596,11 +683,41 @@ class _Handler(BaseHTTPRequestHandler):
             if path=="/api/set-location":
                 lat = float((q.get("lat") or ["0"])[0])
                 lon = float((q.get("lon") or ["0"])[0])
+                reverse = reverse_geocode(lat, lon, limit=1)
                 saved = save_location(lat, lon)
+                if reverse:
+                    hit = reverse[0]
+                    saved.update({
+                        "formatted": hit.get("formatted") or "",
+                        "city": hit.get("city") or "",
+                        "region": hit.get("state") or "",
+                        "country": hit.get("country") or "",
+                        "place_id": hit.get("place_id"),
+                    })
+                    try:
+                        LOCATION_FILE.write_text(
+                            json.dumps(saved, ensure_ascii=False, indent=2),
+                            encoding="utf-8",
+                        )
+                    except Exception:
+                        pass
                 self._json(200, saved)
                 return
             if path=="/api/geocode":
                 self._json(200,{"results":geocode((q.get("text") or [""])[0])}); return
+            if path=="/api/reverse":
+                self._json(200,{"results":reverse_geocode(
+                    float((q.get("lat") or ["0"])[0]),
+                    float((q.get("lon") or ["0"])[0]),
+                )}); return
+            if path=="/api/autocomplete":
+                self._json(200,{"results":autocomplete((q.get("text") or [""])[0])}); return
+            if path=="/api/place-details":
+                self._json(200,place_details(
+                    place_id=str((q.get("id") or [""])[0] or ""),
+                    lat=float((q.get("lat") or ["0"])[0]) if not (q.get("id") or [""]) [0] else None,
+                    lon=float((q.get("lon") or ["0"])[0]) if not (q.get("id") or [""]) [0] else None,
+                )); return
             if path=="/api/search":
                 self._json(200,search((q.get("q") or [""])[0],float((q.get("lat") or ["20"])[0]),float((q.get("lon") or ["78"])[0]))); return
             if path=="/api/route":
