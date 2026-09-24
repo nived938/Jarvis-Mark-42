@@ -1629,7 +1629,9 @@ class JarvisLive:
             )
             return True
 
-        # Geoapify Maps commands stay local so the HUD opens immediately.
+        # Maps are a direct HUD capability. Do not route the explicit local
+        # command through the action registry: the HUD must open even if the
+        # discoverable action is unavailable or loaded with a different context.
         if low in {
             "open geoapify maps",
             "open geoapify map",
@@ -1638,12 +1640,13 @@ class JarvisLive:
             "open map",
             "show map",
         }:
-            result = self._run_local_action("geoapify_maps", {"action": "open"})
-            self.speak(
-                "Sir, Geoapify Maps is open on the HUD."
-                if "opened" in result.lower()
-                else "Sir, Geoapify Maps is not configured yet."
-            )
+            try:
+                self.ui.show_geoapify_maps("")
+                self.ui.write_log("SYS: Geoapify Maps HUD opened.")
+                self.speak("Sir, Geoapify Maps is open on the HUD.")
+            except Exception as exc:
+                self.ui.write_log(f"ERR: Geoapify Maps HUD failed — {exc}")
+                self.speak("Sir, I couldn't open the Geoapify Maps HUD.")
             return True
 
         map_match = _re.fullmatch(
@@ -1652,12 +1655,13 @@ class JarvisLive:
         )
         if map_match:
             query = map_match.group(1).strip()
-            result = self._run_local_action("geoapify_maps", {"action": "search", "query": query})
-            self.speak(
-                f"Sir, I opened the map and searched for {query}."
-                if "opened" in result.lower()
-                else "Sir, Geoapify Maps is not configured yet."
-            )
+            try:
+                self.ui.show_geoapify_maps(query)
+                self.ui.write_log(f"SYS: Geoapify Maps HUD search — {query}")
+                self.speak(f"Sir, I opened the map and searched for {query}.")
+            except Exception as exc:
+                self.ui.write_log(f"ERR: Geoapify Maps search HUD failed — {exc}")
+                self.speak("Sir, I couldn't open the Geoapify Maps HUD.")
             return True
 
         place_match = _re.fullmatch(
@@ -1666,12 +1670,13 @@ class JarvisLive:
         )
         if place_match:
             query = place_match.group(1).strip()
-            result = self._run_local_action("geoapify_maps", {"action": "search", "query": query})
-            self.speak(
-                f"Sir, I opened the map for {query}."
-                if "opened" in result.lower()
-                else "Sir, Geoapify Maps is not configured yet."
-            )
+            try:
+                self.ui.show_geoapify_maps(query)
+                self.ui.write_log(f"SYS: Geoapify Maps HUD place — {query}")
+                self.speak(f"Sir, I opened the map for {query}.")
+            except Exception as exc:
+                self.ui.write_log(f"ERR: Geoapify Maps place HUD failed — {exc}")
+                self.speak("Sir, I couldn't open the Geoapify Maps HUD.")
             return True
         # Camera commands must be handled before generic "open <app>" matching.
         # Otherwise "open camera" can launch a Windows Camera.lnk instead of the
