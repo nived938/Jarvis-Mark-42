@@ -510,7 +510,7 @@ function routeSummary(distanceM,timeS){
   const km=Number(distanceM||0)/1000;
   const min=Math.max(0,Number(timeS||0))/60;
   const d=km>=1?km.toFixed(1)+' km':Math.round(Number(distanceM||0))+' m';
-  const t=min>=60?Math.floor(min/60)+' h '+Math.round(min%60)+' min':Math.round(min)+' min';
+  const t=min>=60?Math.floor(min/60)+' h '+Math.round(min%%60)+' min':Math.round(min)+' min';
   return d+' • '+t;
 }
 async function routeTo(q){status.textContent='FINDING DESTINATION…';try{const c=map.getCenter();const g=await fetch('/api/geocode?'+new URLSearchParams({text:q}));const gp=await g.json();if(!g.ok||!(gp.results||[]).length)throw Error('Destination not found');const d=gp.results[0];const r=await fetch('/api/route?'+new URLSearchParams({slat:c.lat,slon:c.lng,elat:d.lat,elon:d.lon,mode:'drive'}));const p=await r.json();if(!r.ok)throw Error(p.error||'Route failed');if(routeLayer)map.removeLayer(routeLayer);routeLayer=L.geoJSON(p,{style:{color:'#00d4ff',weight:5,opacity:.85}}).addTo(map);map.fitBounds(routeLayer.getBounds(),{padding:[30,30]});status.textContent='ROUTE • DRIVE';}catch(e){status.textContent='ROUTE ERROR: '+e.message;}}
