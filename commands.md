@@ -241,19 +241,3 @@ click the green Save button on the screen
 ```
 
 JARVIS uses the existing screen-vision pipeline to locate UI elements by natural-language description and can click the recognized target.
-
-## Google Maps
-
-Examples:
-open google maps
-open maps
-show google maps
-show maps
-search maps for coffee shops
-find maps for hospitals
-show map of Lulu Mall
-open map of Bengaluru
-
-Google Maps opens in the center HUD. The map provides the Maps JavaScript API and Places library features available to the configured key, including place search, autocomplete, markers, and available place details.
-
-Say close to leave the Maps HUD.
