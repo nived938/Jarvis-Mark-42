@@ -123,9 +123,10 @@ def stopwatch(parameters=None, **_) -> str:
 TOOL = {
     "name": "stopwatch",
     "description": (
-        "Control a persistent stopwatch. Start, pause, resume, stop, reset, "
-        "record laps, list laps, or get elapsed time. It keeps its state in a "
-        "local JSON file so a restart does not lose the recorded time."
+        "Control a persistent count-up stopwatch. Start, pause, resume, stop, reset, "
+        "record laps, list laps, or get elapsed time. Use this for open-ended timing. "
+        "When the user says 'set X seconds stopwatch' or otherwise gives a duration, "
+        "use the timer tool instead so it automatically stops after that duration."
     ),
     "parameters": {
         "type": "OBJECT",
