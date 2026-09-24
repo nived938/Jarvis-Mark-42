@@ -1628,6 +1628,50 @@ class JarvisLive:
             )
             return True
 
+        # Geoapify Maps commands stay local so the HUD opens immediately.
+        if low in {
+            "open geoapify maps",
+            "open geoapify map",
+            "open maps",
+            "show maps",
+            "open map",
+            "show map",
+        }:
+            result = self._run_local_action("geoapify_maps", {"action": "open"})
+            self.speak(
+                "Sir, Geoapify Maps is open on the HUD."
+                if "opened" in result.lower()
+                else "Sir, Geoapify Maps is not configured yet."
+            )
+            return True
+
+        map_match = _re.fullmatch(
+            r"(?:search|find|look up)\s+(?:geoapify\s+)?maps\s+for\s+(.+)",
+            low, flags=_re.IGNORECASE,
+        )
+        if map_match:
+            query = map_match.group(1).strip()
+            result = self._run_local_action("geoapify_maps", {"action": "search", "query": query})
+            self.speak(
+                f"Sir, I opened the map and searched for {query}."
+                if "opened" in result.lower()
+                else "Sir, Geoapify Maps is not configured yet."
+            )
+            return True
+
+        place_match = _re.fullmatch(
+            r"(?:show|open)\s+(?:the\s+)?map\s+of\s+(.+)",
+            low, flags=_re.IGNORECASE,
+        )
+        if place_match:
+            query = place_match.group(1).strip()
+            result = self._run_local_action("geoapify_maps", {"action": "search", "query": query})
+            self.speak(
+                f"Sir, I opened the map for {query}."
+                if "opened" in result.lower()
+                else "Sir, Geoapify Maps is not configured yet."
+            )
+            return True
         # Camera commands must be handled before generic "open <app>" matching.
         # Otherwise "open camera" can launch a Windows Camera.lnk instead of the
         # persistent live camera inside the JARVIS HUD.
