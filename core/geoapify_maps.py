@@ -12,6 +12,7 @@ from typing import Any
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+LOCATION_FILE = BASE_DIR / "memory" / "geoapify_map_location.json"
 _TIMEOUT = 12.0
 _LEAFLET_CSS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
 _LEAFLET_JS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
@@ -82,11 +83,30 @@ def _request_bytes(url: str) -> tuple[bytes, str]:
     except urllib.error.URLError as exc:
         raise RuntimeError(f"Geoapify tile connection failed: {exc.reason}") from exc
 
-def geocode(text: str, limit: int = 5) -> list[dict[str, Any]]:
+def geocode(
+    text: str,
+    limit: int = 5,
+    bias_lat: float | None = None,
+    bias_lon: float | None = None,
+    radius_m: int | None = None,
+) -> list[dict[str, Any]]:
     text = str(text or "").strip()
     if not text:
         return []
-    params = urllib.parse.urlencode({"text": text, "format": "json", "limit": max(1, min(limit, 10)), "apiKey": _api_key()})
+
+    params_dict: dict[str, Any] = {
+        "text": text,
+        "format": "json",
+        "limit": max(1, min(int(limit), 10)),
+        "apiKey": _api_key(),
+    }
+    if bias_lat is not None and bias_lon is not None:
+        params_dict["bias"] = f"proximity:{float(bias_lon)},{float(bias_lat)}"
+        if radius_m:
+            params_dict["filter"] = (
+                f"circle:{float(bias_lon)},{float(bias_lat)},{max(100, int(radius_m))}"
+            )
+    params = urllib.parse.urlencode(params_dict)
     payload = _request_json(f"https://api.geoapify.com/v1/geocode/search?{params}")
     out = []
     for item in payload.get("results", []) or []:
@@ -147,6 +167,44 @@ def _category_for_query(query: str) -> str | None:
             return category
     return None
 
+def saved_location() -> dict[str, Any] | None:
+    """Return the user-selected local map location, if one has been saved."""
+    try:
+        data = json.loads(LOCATION_FILE.read_text(encoding="utf-8"))
+        lat = float(data["lat"])
+        lon = float(data["lon"])
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            return None
+        return {
+            "lat": lat,
+            "lon": lon,
+            "city": str(data.get("city") or "").strip(),
+            "region": str(data.get("region") or "").strip(),
+            "country": str(data.get("country") or "").strip(),
+            "saved": True,
+        }
+    except Exception:
+        return None
+
+
+def save_location(lat: float, lon: float) -> dict[str, Any]:
+    lat = float(lat)
+    lon = float(lon)
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise ValueError("Invalid map coordinates.")
+    LOCATION_FILE.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "lat": lat,
+        "lon": lon,
+        "saved": True,
+    }
+    LOCATION_FILE.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return data
+
+
 def current_ip_location() -> dict[str, Any]:
     """Return approximate public-IP location for centering the JARVIS map."""
     req = urllib.request.Request(
@@ -172,18 +230,55 @@ def current_ip_location() -> dict[str, Any]:
 
 def search(query: str, lat: float, lon: float) -> dict[str, Any]:
     text = str(query or "").strip()
+    low = re.sub(r"\s+", " ", text.lower()).strip()
+    near_me = bool(re.search(r"\bnear\s+me\b|\baround\s+me\b|\bclose\s+to\s+me\b", low))
+
+    saved = saved_location()
+    if near_me and saved:
+        lat, lon = saved["lat"], saved["lon"]
+    elif near_me and not saved:
+        try:
+            ip = current_ip_location()
+            lat, lon = ip["lat"], ip["lon"]
+        except Exception:
+            pass
+
     category = _category_for_query(text)
     if category:
-        cleaned = re.sub(r"\b(near|around|at|in)\b", " ", text, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\b(near|around|at|in|me)\b", " ", text, flags=re.IGNORECASE)
         for key in sorted(_CATEGORY_MAP, key=len, reverse=True):
             cleaned = re.sub(rf"\b{re.escape(key)}\b", " ", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         if cleaned:
-            hit = geocode(cleaned, limit=1)
+            hit = geocode(
+                cleaned,
+                limit=1,
+                bias_lat=lat,
+                bias_lon=lon,
+            )
             if hit:
                 lat, lon = hit[0]["lat"], hit[0]["lon"]
-        return {"kind": "places", "query": text, "results": places(category, lat, lon)}
-    return {"kind": "geocode", "query": text, "results": geocode(text, limit=8)}
+        return {
+            "kind": "places",
+            "query": text,
+            "results": places(category, lat, lon, radius=20000 if near_me else 5000),
+        }
+
+    cleaned = re.sub(r"\bnear\s+me\b|\baround\s+me\b|\bclose\s+to\s+me\b", " ", text, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip() or text
+    results = geocode(
+        cleaned,
+        limit=5,
+        bias_lat=lat,
+        bias_lon=lon,
+        radius_m=100000 if near_me else None,
+    )
+    return {
+        "kind": "geocode",
+        "query": text,
+        "results": results,
+        "near_me": near_me,
+    }
 
 def _html() -> str:
     return """<!doctype html>
@@ -200,31 +295,100 @@ html,body,#map{width:100%%;height:100%%;margin:0;background:#061018}
 <script src="%s"></script><script>
 const map=L.map('map').setView([20,78],5);
 L.tileLayer('/tiles/carto/{z}/{x}/{y}.png',{maxZoom:19,attribution:'Powered by <a href="https://www.geoapify.com/" target="_blank">Geoapify</a> | © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>'}).addTo(map);
-const markers=L.layerGroup().addTo(map); let routeLayer=null;
+const markers=L.layerGroup().addTo(map);
+let myLocationMarker=null;
+let setLocationMode=false;
+let routeLayer=null;
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function showResults(p){markers.clearLayers();const rows=p.results||[];if(!rows.length){status.textContent='NO RESULTS';return;}const b=[];rows.forEach(x=>{const m=L.marker([x.lat,x.lon]).addTo(markers);m.bindPopup('<b>'+esc(x.name||'Location')+'</b><br>'+esc(x.formatted||''));b.push([x.lat,x.lon]);});map.fitBounds(b,{padding:[36,36],maxZoom:16});status.textContent=(p.kind==='places'?'PLACES':'SEARCH')+' • '+rows.length+' RESULT(S)';}
+
+function putMyLocation(lat,lon,label='MY LOCATION'){
+  if(myLocationMarker) map.removeLayer(myLocationMarker);
+  myLocationMarker=L.circleMarker([lat,lon],{
+    radius:9,color:'#00aaff',weight:3,fillColor:'#00aaff',fillOpacity:.45
+  }).addTo(map);
+  myLocationMarker.bindPopup('<b>MY LOCATION</b><br>'+esc(label));
+}
+
+function loadSavedLocation(){
+  fetch('/api/saved-location')
+    .then(r=>r.json())
+    .then(p=>{
+      if(p.saved && Number.isFinite(p.lat) && Number.isFinite(p.lon)){
+        const label=[p.city,p.region,p.country].filter(Boolean).join(', ') || 'Saved map location';
+        putMyLocation(p.lat,p.lon,label);
+      }
+    })
+    .catch(()=>{});
+}
+
+function showResults(p){
+  markers.clearLayers();
+  const rows=p.results||[];
+  if(!rows.length){
+    status.textContent='NO RESULTS';
+    return;
+  }
+  rows.forEach(x=>{
+    const m=L.marker([x.lat,x.lon]).addTo(markers);
+    const distance = x.distance != null ? '<br>'+Math.round(Number(x.distance))+' m away' : '';
+    m.bindPopup('<b>'+esc(x.name||'Location')+'</b><br>'+esc(x.formatted||'')+distance);
+  });
+
+  if(p.kind==='places'){
+    const b=rows.map(x=>[x.lat,x.lon]);
+    map.fitBounds(b,{padding:[36,36],maxZoom:16});
+  }else{
+    // Text/address searches can return candidates spread across a country.
+    // Focus the map on the best result instead of zooming all the way out.
+    map.setView([rows[0].lat,rows[0].lon],15,{animate:true});
+    map.openPopup();
+  }
+
+  status.textContent=(p.kind==='places'?'PLACES':'SEARCH')+' • '+rows.length+' RESULT(S)';
+}
+
+async function enableSetLocation(){
+  setLocationMode=true;
+  map.getContainer().style.cursor='crosshair';
+  status.textContent='CLICK THE MAP TO SET YOUR LOCATION';
+}
+
+map.on('click',async e=>{
+  if(!setLocationMode)return;
+  setLocationMode=false;
+  map.getContainer().style.cursor='';
+  status.textContent='SAVING LOCATION…';
+  try{
+    const r=await fetch('/api/set-location?'+new URLSearchParams({lat:e.latlng.lat,lon:e.latlng.lng}));
+    const p=await r.json();
+    if(!r.ok) throw Error(p.error||'Could not save location');
+    putMyLocation(p.lat,p.lon,'User-selected map location');
+    map.setView([p.lat,p.lon],16,{animate:true});
+    myLocationMarker.openPopup();
+    status.textContent='LOCATION SAVED';
+  }catch(err){
+    status.textContent='LOCATION ERROR: '+err.message;
+  }
+});
 async function locateUser(){
   status.textContent='LOCATING…';
   try{
     const r=await fetch('/api/location');
     const p=await r.json();
     if(!r.ok) throw Error(p.error||'Location lookup failed');
-    markers.clearLayers();
-    const marker=L.circleMarker([p.lat,p.lon],{
-      radius:9,color:'#00d4ff',weight:3,fillColor:'#00d4ff',fillOpacity:.35
-    }).addTo(markers);
-    const place=[p.city,p.region,p.country].filter(Boolean).join(', ');
-    marker.bindPopup('<b>YOU ARE HERE</b><br>'+esc(place||'Approximate location'));
-    map.setView([p.lat,p.lon],14,{animate:true});
-    marker.openPopup();
-    status.textContent='YOUR LOCATION • APPROXIMATE';
+    putMyLocation(p.lat,p.lon,[p.city,p.region,p.country].filter(Boolean).join(', ') || (p.saved ? 'Saved map location' : 'Approximate location'));
+    map.setView([p.lat,p.lon],16,{animate:true});
+    myLocationMarker.openPopup();
+    status.textContent=p.saved ? 'YOUR LOCATION • SAVED' : 'YOUR LOCATION • APPROXIMATE';
   }catch(e){
     status.textContent='LOCATION ERROR: '+e.message;
   }
 }
 async function searchMap(q){if(!q)return;status.textContent='SEARCHING…';const c=map.getCenter();try{const r=await fetch('/api/search?'+new URLSearchParams({q,lat:c.lat,lon:c.lng}));const p=await r.json();if(!r.ok)throw Error(p.error||'Search failed');showResults(p);}catch(e){status.textContent='ERROR: '+e.message;}}
 async function routeTo(q){status.textContent='FINDING DESTINATION…';try{const c=map.getCenter();const g=await fetch('/api/geocode?'+new URLSearchParams({text:q}));const gp=await g.json();if(!g.ok||!(gp.results||[]).length)throw Error('Destination not found');const d=gp.results[0];const r=await fetch('/api/route?'+new URLSearchParams({slat:c.lat,slon:c.lng,elat:d.lat,elon:d.lon,mode:'drive'}));const p=await r.json();if(!r.ok)throw Error(p.error||'Route failed');if(routeLayer)map.removeLayer(routeLayer);routeLayer=L.geoJSON(p,{style:{color:'#00d4ff',weight:5,opacity:.85}}).addTo(map);map.fitBounds(routeLayer.getBounds(),{padding:[30,30]});status.textContent='ROUTE • DRIVE';}catch(e){status.textContent='ROUTE ERROR: '+e.message;}}
-const initialQuery=new URLSearchParams(location.search).get('q')||'';if(initialQuery)searchMap(initialQuery);
+loadSavedLocation();
+const initialQuery=new URLSearchParams(location.search).get('q')||'';
+if(initialQuery)searchMap(initialQuery);
 </script></body></html>""" % (_LEAFLET_CSS, _LEAFLET_JS)
 
 class _Handler(BaseHTTPRequestHandler):
@@ -232,7 +396,17 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         return
     def _send(self,status:int,body:bytes,content_type:str)->None:
-        self.send_response(status);self.send_header("Content-Type",content_type);self.send_header("Cache-Control","no-store");self.send_header("Content-Length",str(len(body)));self.end_headers();self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type",content_type)
+            self.send_header("Cache-Control","no-store")
+            self.send_header("Content-Length",str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            # Chromium can cancel old tile requests while the map is panning or
+            # reusing the page. That is normal and should never spam the console.
+            return
     def _json(self,status:int,payload:dict[str,Any])->None:
         self._send(status,json.dumps(payload,ensure_ascii=False).encode("utf-8"),"application/json; charset=utf-8")
     def do_GET(self)->None:
@@ -247,7 +421,19 @@ class _Handler(BaseHTTPRequestHandler):
                 data,ctype=_request_bytes("https://maps.geoapify.com/v1/tile/carto/%s/%s/%s.png?apiKey=%s"%(z,x,y,urllib.parse.quote(_api_key())))
                 self._send(200,data,ctype); return
             if path=="/api/location":
-                self._json(200, current_ip_location())
+                location = saved_location()
+                if location is None:
+                    location = current_ip_location()
+                self._json(200, location)
+                return
+            if path=="/api/saved-location":
+                self._json(200, saved_location() or {"saved": False})
+                return
+            if path=="/api/set-location":
+                lat = float((q.get("lat") or ["0"])[0])
+                lon = float((q.get("lon") or ["0"])[0])
+                saved = save_location(lat, lon)
+                self._json(200, saved)
                 return
             if path=="/api/geocode":
                 self._json(200,{"results":geocode((q.get("text") or [""])[0])}); return
