@@ -1549,6 +1549,30 @@ class JarvisLive:
 
         # Network Quality Monitor: the complete diagnostic is shown on the HUD.
         if low in {
+            "start network monitor",
+            "start network monitoring",
+            "monitor my network",
+            "monitor the network",
+        }:
+            result = self._run_local_action(
+                "network_quality",
+                {"action": "start", "interval": 60},
+            )
+            self.ui.write_log("SYS: " + result)
+            self.speak("Sir, network quality monitoring is now running.")
+            return True
+
+        if low in {
+            "stop network monitor",
+            "stop network monitoring",
+            "stop monitoring my network",
+        }:
+            result = self._run_local_action("network_quality", {"action": "stop"})
+            self.ui.write_log("SYS: " + result)
+            self.speak("Sir, network quality monitoring has stopped.")
+            return True
+
+        if low in {
             "show network quality",
             "check network quality",
             "check internet quality",
