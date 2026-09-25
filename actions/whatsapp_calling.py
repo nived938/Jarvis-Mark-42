@@ -773,9 +773,10 @@ def _fallback_connected_call_state(
         is_preconnect,
         has_call_controls,
         has_explicit_connected_state,
+        visual_connected,
     ) = _call_ui_snapshot(win)
 
-    if has_duration or has_explicit_connected_state:
+    if has_duration or has_explicit_connected_state or visual_connected:
         return True
 
     if is_preconnect:
@@ -909,9 +910,10 @@ def _monitor_loop() -> None:
                         is_preconnect,
                         has_controls,
                         explicit_connected,
+                        visual_connected,
                     ) = _call_ui_snapshot(candidate)
 
-                    if has_duration or explicit_connected:
+                    if has_duration or explicit_connected or visual_connected:
                         connected = True
                         any_call_ui = True
                         break
