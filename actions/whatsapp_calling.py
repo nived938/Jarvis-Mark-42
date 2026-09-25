@@ -703,6 +703,12 @@ def _select_contact_chat(win, contact: str) -> bool:
     try:
         _focus_whatsapp(win)
 
+        # The call flow often returns to the same chat after hanging up.
+        # Reuse it when it is already the requested contact instead of reopening
+        # the New Chat dialog.
+        if _active_chat_matches_contact(win, contact):
+            return True
+
         # WhatsApp for Windows documents Ctrl+Alt+N as "New chat". This is
         # safer than Ctrl+F because Ctrl+F is for searching chat content.
         pyautogui.hotkey("ctrl", "alt", "n")
@@ -1000,6 +1006,8 @@ TOOL = {
         "tool request after a successful start. Do not claim a call started or ended "
         "unless the WhatsApp button was actually found and clicked."
     ),
+    "behavior": "NON_BLOCKING",
+    "scheduling": "SILENT",
     "parameters": {
         "type": "OBJECT",
         "properties": {
