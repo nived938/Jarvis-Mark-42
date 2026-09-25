@@ -99,7 +99,6 @@ _VOICE_NAMES = (
     "audio call",
     "start voice call",
     "start audio call",
-    "call",
 )
 _VIDEO_NAMES = (
     "video call",
@@ -214,14 +213,13 @@ def _button_controls(win) -> list:
 
 
 def _button_matches(control, candidates: tuple[str, ...]) -> bool:
+    """Match semantic button labels without allowing generic substring collisions."""
     wanted = tuple(_norm(x) for x in candidates)
     for label in _labels(control):
         value = _norm(label)
         if not value:
             continue
         if value in wanted:
-            return True
-        if any(candidate in value for candidate in wanted):
             return True
     return False
 
@@ -255,6 +253,41 @@ def _click_button(win, candidates: tuple[str, ...]) -> tuple[bool, str]:
             return True, name
         except Exception:
             return False, name
+
+
+def _outgoing_call_state(win) -> bool:
+    """Return True only when WhatsApp exposes controls/state belonging to an active call."""
+    labels = [_norm(x) for x in _all_visible_text(win)]
+    joined = " ".join(labels)
+
+    state_markers = (
+        "end call",
+        "hang up",
+        "mute",
+        "unmute",
+        "speaker",
+        "turn off camera",
+        "turn on camera",
+        "video off",
+        "video on",
+        "calling",
+        "ringing",
+    )
+    return any(marker in joined for marker in state_markers)
+
+
+def _wait_for_outgoing_call_state(timeout: float = 4.0) -> bool:
+    deadline = time.monotonic() + max(0.5, float(timeout))
+    while time.monotonic() < deadline:
+        windows = _whatsapp_windows()
+        for win in windows:
+            try:
+                if _outgoing_call_state(win):
+                    return True
+            except Exception:
+                pass
+        time.sleep(0.25)
+    return False
 
 
 def _all_visible_text(win) -> list[str]:
@@ -562,9 +595,21 @@ def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
                 "could not be located through Windows accessibility."
             )
 
+        # Clicking a button is not enough to claim success. Verify that
+        # WhatsApp actually transitioned into its outgoing-call UI. This also
+        # prevents the sidebar "Calls" navigation button from being reported
+        # as a successful call.
+        if not _wait_for_outgoing_call_state(4.0):
+            kind = "video" if video else "voice"
+            return (
+                f"WhatsApp's {kind} call control was clicked in {contact}'s chat, "
+                "but WhatsApp did not show an active outgoing-call state. "
+                "The call was not reported as started."
+            )
+
         return (
             f"{'Video' if video else 'Voice'} call started with {contact}. "
-            f"Clicked WhatsApp's {button_name} button."
+            f"Clicked WhatsApp's {button_name} button and verified the active call UI."
         )
     except Exception as exc:
         return f"Could not start WhatsApp call: {exc}"
