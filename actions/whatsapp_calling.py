@@ -91,6 +91,9 @@ _BASE_DIR = Path(__file__).resolve().parent.parent
 _BUTTON_CACHE_PATH = _BASE_DIR / "memory" / "whatsapp_call_button_cache.json"
 _BUTTON_CACHE_LOCK = threading.RLock()
 _OUTGOING_CALL_LOCK = threading.Lock()
+# Prevent the background incoming-call UIA scanner from competing with an
+# outgoing call. The watcher can resume as soon as the click is done.
+_OUTGOING_CALL_ACTIVE = threading.Event()
 
 
 def _load_button_cache() -> dict:
@@ -122,6 +125,8 @@ def _cache_button_location(win, button, kind: str) -> None:
             "y": int(center_y - win_rect.top),
             "window_width": int(win_rect.width()),
             "window_height": int(win_rect.height()),
+            "screen_x": int(center_x),
+            "screen_y": int(center_y),
             "updated_at": time.time(),
         }
         with _BUTTON_CACHE_LOCK:
@@ -131,6 +136,99 @@ def _cache_button_location(win, button, kind: str) -> None:
         print(f"[whatsapp_calling] Cached {kind} call button at relative ({payload['x']}, {payload['y']}).")
     except Exception as exc:
         print(f"[whatsapp_calling] Could not cache {kind} call button: {exc}")
+
+
+def _foreground_whatsapp_rect():
+    """Get the foreground WhatsApp window rectangle without UI Automation."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return None
+        length = user32.GetWindowTextLengthW(hwnd)
+        buf = ctypes.create_unicode_buffer(max(1, length + 1))
+        user32.GetWindowTextW(hwnd, buf, len(buf))
+        title = _norm(buf.value)
+        if "whatsapp" not in title:
+            return None
+        class RECT(ctypes.Structure):
+            _fields_ = [
+                ("left", ctypes.c_long),
+                ("top", ctypes.c_long),
+                ("right", ctypes.c_long),
+                ("bottom", ctypes.c_long),
+            ]
+        rect = RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return None
+        return (
+            hwnd,
+            int(rect.left),
+            int(rect.top),
+            int(rect.right),
+            int(rect.bottom),
+        )
+    except Exception:
+        return None
+
+
+def _click_cached_button_fast(kind: str) -> tuple[bool, str]:
+    """Click the cached call button using only Win32 + PyAutoGUI.
+    
+    This is the hot path. It does not enumerate descendants or inspect the
+    WhatsApp accessibility tree.
+    """
+    try:
+        with _BUTTON_CACHE_LOCK:
+            payload = _load_button_cache().get(kind)
+        if not isinstance(payload, dict):
+            return False, ""
+
+        screen_x = payload.get("screen_x")
+        screen_y = payload.get("screen_y")
+        foreground = _foreground_whatsapp_rect()
+        if foreground is None:
+            return False, ""
+
+        _hwnd, left, top, right, bottom = foreground
+        width = max(1, right - left)
+        height = max(1, bottom - top)
+
+        if screen_x is None or screen_y is None:
+            cached_width = max(1, int(payload.get("window_width", width)))
+            cached_height = max(1, int(payload.get("window_height", height)))
+            cached_x = int(payload.get("x", 0))
+            cached_y = int(payload.get("y", 0))
+            screen_x = left + int(cached_x * width / cached_width)
+            screen_y = top + int(cached_y * height / cached_height)
+        else:
+            # Absolute coordinates are ideal when the window has not moved.
+            # When it moved, translate the old point by the window-origin delta
+            # before falling back to proportional scaling.
+            old_w = max(1, int(payload.get("window_width", width)))
+            old_h = max(1, int(payload.get("window_height", height)))
+            old_x = int(screen_x)
+            old_y = int(screen_y)
+            cached_left = old_x - int(payload.get("x", 0))
+            cached_top = old_y - int(payload.get("y", 0))
+            dx = left - cached_left
+            dy = top - cached_top
+            screen_x = old_x + dx
+            screen_y = old_y + dy
+            if width != old_w or height != old_h:
+                screen_x = left + int(int(payload.get("x", 0)) * width / old_w)
+                screen_y = top + int(int(payload.get("y", 0)) * height / old_h)
+
+        if not (left <= screen_x <= right and top <= screen_y <= bottom):
+            return False, ""
+
+        pyautogui.click(int(screen_x), int(screen_y))
+        return True, f"cached {kind} call button"
+    except Exception:
+        return False, ""
 
 
 def _click_cached_button(win, kind: str) -> tuple[bool, str]:
@@ -585,6 +683,11 @@ def _monitor_loop() -> None:
             win, caller, call_type = _incoming_window()
             current = _pending_snapshot()
 
+            if _OUTGOING_CALL_ACTIVE.is_set():
+                # Outgoing calls use a deliberately fast keyboard/mouse path and
+                # should never contend with a full UIA tree walk from this watcher.
+                continue
+
             if win is None:
                 if current is not None:
                     _set_pending(None)
@@ -753,6 +856,7 @@ def _select_contact_chat(win, contact: str) -> bool:
 
 
 def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
+    """Start an outgoing call using the same fast search path as send_message.py."""
     contact = str(contact or "").strip()
     if not contact:
         return "Please specify a WhatsApp contact."
@@ -760,127 +864,88 @@ def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
     if not _PYAUTOGUI:
         return "PyAutoGUI is not installed, so WhatsApp cannot be controlled."
 
-    if not _PYWINAUTO:
-        return "pywinauto is not installed, so WhatsApp call buttons cannot be controlled."
+    kind = "video" if video else "voice"
+    candidates = _VIDEO_NAMES if video else _VOICE_NAMES
+
+    # Cached calls need only PyAutoGUI + Win32. UI Automation is required only
+    # when the cache has never been calibrated yet.
+    with _BUTTON_CACHE_LOCK:
+        has_cache = isinstance(_load_button_cache().get(kind), dict)
+    if not has_cache and not _PYWINAUTO:
+        return (
+            "Pywinauto is not installed, and the WhatsApp call-button cache "
+            "has not been calibrated yet."
+        )
 
     if _open_messaging_app is None or _search_in_app is None:
         return "The existing WhatsApp messaging helpers are unavailable."
 
-    # Only one outgoing-call workflow may control WhatsApp at a time. This
-    # prevents simultaneous local/model triggers from changing the selected chat.
     if not _OUTGOING_CALL_LOCK.acquire(blocking=False):
         return "A WhatsApp outgoing-call command is already in progress. I will not start another call."
 
+    _OUTGOING_CALL_ACTIVE.set()
+    started = time.monotonic()
     try:
         if player:
             player.write_log(
-                f"SYS: Opening WhatsApp and preparing a {'video' if video else 'voice'} call to {contact}."
+                f"SYS: Opening WhatsApp and fast-searching {contact} for a "
+                f"{'video' if video else 'voice'} call."
             )
 
-        # Calling must not depend on send_message.py's Start Menu search.
-        # Launch the registered WhatsApp executable directly when available.
-        launched_path = None
-        if _launch_registered_app is not None:
-            try:
-                launched_path = _launch_registered_app("WhatsApp")
-            except Exception as exc:
-                if player:
-                    player.write_log(f"ERR: Direct WhatsApp launch failed — {exc}")
+        # This is intentionally the exact same path used by send_message.py:
+        # open WhatsApp, Ctrl+F, paste the contact, Enter.
+        if not _open_messaging_app("WhatsApp"):
+            return "Could not open WhatsApp."
 
-        if launched_path is None and _launch_windows_app_registration is not None:
-            try:
-                launched_path = _launch_windows_app_registration("WhatsApp")
-            except Exception as exc:
-                if player:
-                    player.write_log(
-                        f"ERR: Windows WhatsApp app registration launch failed — {exc}"
-                    )
+        time.sleep(0.35)
+        _search_in_app(contact)
+        time.sleep(0.15)
+        pyautogui.press("enter")
+        time.sleep(0.55)
 
-        if launched_path is None:
+        # Hot path: no pywinauto, no descendant enumeration, no contact-header
+        # verification. The existing cached button location is enough.
+        ok, button_name = _click_cached_button_fast(kind)
+        if ok:
+            elapsed = time.monotonic() - started
+            if player:
+                player.write_log(
+                    f"SYS: Used cached WhatsApp {kind} call button."
+                )
             return (
-                "Could not launch WhatsApp directly. "
-                "Add WhatsApp's executable to memory/app_registry.json or verify "
-                "that the Windows WhatsApp app is installed."
+                f"{'Video' if video else 'Voice'} call started with {contact}. "
+                f"Clicked WhatsApp's {button_name} in the open chat "
+                f"in {elapsed:.2f}s."
             )
 
-        win = _wait_for_whatsapp_window(8.0)
+        # First-call/calibration fallback only. The fast path above is what
+        # repeated calls use. UIA is allowed here to discover the real button and
+        # refresh the cache for the next call.
+        win = _wait_for_whatsapp_window(3.0)
         if win is None:
-            return (
-                "WhatsApp was launched, but no WhatsApp desktop window could be "
-                "found. Check that the app is running and signed in."
-            )
-
-        # Never start another outgoing call while WhatsApp already exposes its
-        # active-call UI. This protects against a duplicate model tool call.
-        try:
-            if _outgoing_call_state(win):
-                return "A WhatsApp call is already active. I will not start another call."
-        except Exception:
-            pass
-
-        _focus_whatsapp(win)
-        time.sleep(0.3)
-
-        # Ctrl+F can search message text or leave the keyboard selection on a
-        # neighboring chat. Use WhatsApp's actual contact-search field instead.
-        if not _select_contact_chat(win, contact):
-            return (
-                f"WhatsApp could not select the exact chat for {contact}. "
-                "The call was not started."
-            )
-
-        windows = _whatsapp_windows()
-        if not windows:
             return "WhatsApp is open, but its native window could not be found."
 
-        win = windows[0]
         _focus_whatsapp(win)
-        time.sleep(0.5)
+        time.sleep(0.15)
 
-        candidates = _VIDEO_NAMES if video else _VOICE_NAMES
-        kind = "video" if video else "voice"
-
-        # Fast path: once the real chat call button has been found successfully,
-        # remember its position relative to the WhatsApp window. Future calls
-        # can click it directly without walking the entire UI Automation tree.
-        ok, button_name = _click_cached_button(win, kind)
-        if ok:
-            if player:
-                player.write_log(f"SYS: Used cached WhatsApp {kind} call button.")
-        else:
-            # Cache the real call button BEFORE clicking it.
-            ok, button_name = _click_chat_call_button(win, candidates, kind)
-
-        if not ok:
-            # Refresh the header once, then locate and cache the real call button
-            # before clicking it.
-            time.sleep(0.35)
-            windows = _whatsapp_windows()
-            win = windows[0] if windows else None
-            if win is not None:
-                _focus_whatsapp(win)
-                ok, button_name = _click_chat_call_button(win, candidates, kind)
-
+        ok, button_name = _click_chat_call_button(win, candidates, kind)
         if not ok:
             return (
                 f"WhatsApp opened {contact}'s chat, but the {kind} call button "
                 "could not be located. The call was not started."
             )
 
-        # The selector is now restricted to the actual voice/video call labels,
-        # so a successful click is the meaningful event. Do not spend several
-        # seconds scanning the entire accessibility tree after the click and do
-        # not return a failure that can cause the assistant to retry the call.
-        time.sleep(0.25)
+        elapsed = time.monotonic() - started
         return (
             f"{'Video' if video else 'Voice'} call started with {contact}. "
-            f"Clicked WhatsApp's {button_name} button in the open chat."
+            f"Clicked WhatsApp's {button_name} button in the open chat "
+            f"in {elapsed:.2f}s."
         )
     except Exception as exc:
         return f"Could not start WhatsApp call: {exc}"
     finally:
+        _OUTGOING_CALL_ACTIVE.clear()
         _OUTGOING_CALL_LOCK.release()
-
 
 def _respond(decision: str, message_text: str = "", player=None) -> str:
     current = _pending_snapshot()
