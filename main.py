@@ -2331,113 +2331,6 @@ class JarvisLive:
         self._whatsapp_call_guard[key] = now
         return True
 
-    def _speak_gemini_fast(self, text: str) -> None:
-        """Speak a short acknowledgement with Gemini's configured JARVIS voice.
-        
-        This is deliberately separate from Gemini Live. It uses Gemini TTS
-        generation for the same selected voice, so the WhatsApp call does not
-        wait for a conversational Live turn just to speak one sentence.
-        """
-        if emergency_stop.is_active() or self.ui.muted:
-            return
-
-        def _worker():
-            try:
-                from google import genai as _genai
-
-                _api_key = _get_api_key()
-                _voice = get_voice()
-                _output_name = get_output_device()
-                _output_dev = audio_devices.resolve(_output_name, "output")
-
-                self.ui.write_log(
-                    "SYS: Gemini TTS: "
-                    f"model=gemini-3.8-flash-tts, voice={_voice}, "
-                    f"speaker={_output_name or 'system default'}."
-                )
-
-                _client = _genai.Client(api_key=_api_key)
-                # Keep this request deliberately minimal for the installed
-                # google-genai SDK. TTS accepts plain text input; the SDK version
-                # used by JARVIS expects a Content object here rather than the
-                # list-of-dicts form shown by newer examples, and speech_metadata
-                # is not present in that installed schema.
-                _response = _client.models.generate_content(
-                    model="gemini-3.8-flash-tts",
-                    contents=types.Content(
-                        role="user",
-                        parts=[types.Part(text=str(text))],
-                    ),
-                    config={
-                        "response_modalities": ["AUDIO"],
-                        "speech_config": {
-                            "voice_config": {
-                                "prebuilt_voice_config": {
-                                    "voice_name": _voice,
-                                }
-                            }
-                        },
-                    },
-                )
-
-                _audio = None
-                _mime = ""
-                try:
-                    for _candidate in (_response.candidates or []):
-                        _content = getattr(_candidate, "content", None)
-                        for _part in (getattr(_content, "parts", None) or []):
-                            _blob = getattr(_part, "inline_data", None)
-                            if _blob is not None and getattr(_blob, "data", None):
-                                _audio = _blob.data
-                                _mime = str(getattr(_blob, "mime_type", "") or "")
-                                break
-                        if _audio:
-                            break
-                except Exception:
-                    pass
-
-                if not _audio:
-                    raise RuntimeError("Gemini TTS returned no audio data.")
-
-                import miniaudio as _miniaudio
-                import numpy as _np
-                import sounddevice as _sd
-
-                _decoded = _miniaudio.decode(
-                    _audio,
-                    output_format=_miniaudio.SampleFormat.FLOAT32,
-                    nchannels=1,
-                )
-                _samples = _np.asarray(_decoded.samples, dtype=_np.float32)
-                _rate = int(_decoded.sample_rate or 24000)
-
-                try:
-                    _sd.play(_samples, _rate, device=_output_dev)
-                    _sd.wait()
-                except Exception as _device_exc:
-                    if _output_dev is None:
-                        raise
-                    self.ui.write_log(
-                        f"SYS: Gemini TTS speaker rejected audio — {_device_exc}; "
-                        "retrying system default."
-                    )
-                    _sd.stop()
-                    _sd.play(_samples, _rate)
-                    _sd.wait()
-
-                self.ui.write_log(
-                    f"SYS: Gemini TTS acknowledgement spoken successfully "
-                    f"({len(_audio):,} bytes, {_mime or 'audio'})."
-                )
-            except Exception as exc:
-                self.ui.write_log(f"ERR: Gemini TTS acknowledgement failed — {exc}")
-
-        threading.Thread(
-            target=_worker,
-            name="jarvis-gemini-fast-tts",
-            daemon=True,
-        ).start()
-
     async def _start_fast_whatsapp_call(self, contact: str, video: bool = False) -> None:
         action = "video_call" if video else "call"
         self._whatsapp_fast_call_active = True
@@ -2449,18 +2342,17 @@ class JarvisLive:
                 {"action": action, "contact": contact},
             )
             elapsed = time.monotonic() - self._whatsapp_fast_call_started
-            # IMPORTANT: do not call self.speak() here. self.speak() injects a
-            # new turn into Gemini Live, which can take tens of seconds and made
-            # a local WhatsApp call look slow even after the button was clicked.
+            # The WhatsApp call is already started locally at this point.
+            # Use JARVIS's normal Gemini Live speech path for the acknowledgement
+            # so it sounds exactly like every other JARVIS response (same voice,
+            # same speaker, same audio pipeline). The local call automation does
+            # not wait for this speech to start before reporting success.
             self.ui.write_log(
                 f"JARVIS: {result} (local WhatsApp path {elapsed:.2f}s)"
             )
 
-            # The call is already complete. Give the user a short spoken
-            # acknowledgement through local TTS, not Gemini Live. This runs in
-            # its own thread, so it cannot add latency to the WhatsApp click.
             if str(result).lower().startswith(("voice call started", "video call started")):
-                self._speak_gemini_fast(
+                self.speak(
                     f"Sir, the {'video' if video else 'voice'} call with {contact} has been started."
                 )
         except Exception as exc:
