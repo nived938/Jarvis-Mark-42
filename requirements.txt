@@ -13,6 +13,7 @@ edge-tts>=7,<8
 # package, no OpenGL and no GPU. Nothing below was added for it.
 PyQt6>=6.6,<7
 sounddevice>=0.4,<1
+miniaudio>=1.61,<2
 numpy>=1.24,<3
 google-genai>=2.8.0,<3
 
