@@ -936,6 +936,10 @@ class JarvisLive:
         # no second Gemini speech round-trip is allowed for the same request.
         self._whatsapp_fast_call_active = False
         self._whatsapp_fast_call_started = 0.0
+        # True only while a WhatsApp voice/video call is actually connected.
+        # The PC microphone stays physically open for WhatsApp, but its PCM is
+        # not forwarded into Gemini while this is true.
+        self._whatsapp_call_active = False
         self._trace_id = trace_start_session()
 
         self._client_turn_started = 0.0
@@ -1317,6 +1321,31 @@ class JarvisLive:
                 respond_pending_call as _wa_respond_pending_call,
             )
             if _wa_has_pending_call():
+                incoming_speak = _re.fullmatch(
+                    r"(?:accept|answer)(?: the)? call and (?:tell|say)(?: them| him| her)? (.+)",
+                    raw,
+                    flags=_re.IGNORECASE,
+                )
+                if incoming_speak:
+                    spoken = incoming_speak.group(1).strip()
+                    if _re.fullmatch(r"(?:i am|i'm|im) busy", spoken, flags=_re.IGNORECASE):
+                        spoken = "I am busy."
+                    self.ui.write_log("SYS: Accepting the WhatsApp call and preparing caller speech.")
+                    if self._loop and not self._loop.is_closed():
+                        self._loop.call_soon_threadsafe(
+                            lambda: self._loop.create_task(
+                                asyncio.to_thread(
+                                    self._run_local_action,
+                                    "whatsapp_calling",
+                                    {
+                                        "action": "accept_and_speak",
+                                        "message_text": spoken,
+                                    },
+                                )
+                            )
+                        )
+                    return True
+
                 if low in {
                     "accept",
                     "answer",
@@ -2301,6 +2330,8 @@ class JarvisLive:
                     {
                         "player": self.ui,
                         "speak": self.speak,
+                        "speak_exact": self._queue_whatsapp_exact_speech,
+                        "set_call_active": self._set_whatsapp_call_active,
                         "response": None,
                         "session_memory": None,
                     },
@@ -2330,6 +2361,47 @@ class JarvisLive:
         except Exception as e:
             self.ui.write_log(f"ERR: Local command failed — {e}")
             return str(e)
+
+    def _set_whatsapp_call_active(self, active: bool) -> None:
+        """Tell JARVIS whether a real WhatsApp call is currently connected."""
+        state = bool(active)
+        if state == self._whatsapp_call_active:
+            return
+        self._whatsapp_call_active = state
+        if state:
+            self.ui.write_log(
+                "SYS: WhatsApp call connected — PC microphone is reserved for the call."
+            )
+        else:
+            self.ui.write_log(
+                "SYS: WhatsApp call ended — JARVIS microphone listening restored."
+            )
+
+    def _queue_whatsapp_exact_speech(self, text: str) -> bool:
+        """Queue exact text through the same Gemini Live voice used by JARVIS.
+
+        Unlike self.speak(), this never creates a turn in the main conversation.
+        It renders isolated Live PCM and feeds the normal JARVIS output queue.
+        """
+        if emergency_stop.is_active() or self.ui.muted:
+            return False
+
+        loop = getattr(self, "_loop", None)
+        if loop is None or loop.is_closed():
+            self.ui.write_log("ERR: WhatsApp speech skipped — JARVIS Live loop is unavailable.")
+            return False
+
+        coro = self._speak_fast_ack_live(str(text))
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+
+        if running is loop:
+            loop.create_task(coro)
+        else:
+            asyncio.run_coroutine_threadsafe(coro, loop)
+        return True
 
     def _mark_whatsapp_local_intent(self, action: str, contact: str) -> bool:
         """Reserve one outgoing WhatsApp call intent for 90 seconds."""
@@ -2512,6 +2584,64 @@ class JarvisLive:
         if not raw:
             return False
 
+        # Compound outgoing call + spoken message:
+        # "call Amma and tell I am busy" / "call Amma and tell her I am busy".
+        message_match = _re.fullmatch(
+            r"(?:whatsapp )?call (.+?) and (?:tell|say)(?: (?:them|him|her))? (.+)",
+            raw,
+            flags=_re.IGNORECASE,
+        )
+        if message_match:
+            contact = message_match.group(1).strip()
+            message = message_match.group(2).strip()
+            if contact.casefold() not in {"jarvis", "me", "a cab", "an uber", "a taxi", "someone"}:
+                if _re.fullmatch(r"(?:i am|i'm|im) busy", message, flags=_re.IGNORECASE):
+                    message = "I am busy."
+
+                action = "call_and_speak"
+                if not self._mark_whatsapp_local_intent(action, contact):
+                    return True
+
+                self._whatsapp_fast_call_active = True
+                self._whatsapp_fast_call_started = time.monotonic()
+                self._interrupted = True
+                self._visemes.reset()
+                self.ui.write_log(
+                    f"SYS: Fast WhatsApp call-and-speak starting for {contact}."
+                )
+
+                async def _run_compound():
+                    try:
+                        await asyncio.to_thread(
+                            self._run_local_action,
+                            "whatsapp_calling",
+                            {
+                                "action": "call_and_speak",
+                                "contact": contact,
+                                "message_text": message,
+                            },
+                        )
+                    finally:
+                        self._whatsapp_fast_call_active = False
+                        self._whatsapp_fast_call_started = 0.0
+                        self._interrupted = False
+
+                try:
+                    running = asyncio.get_running_loop()
+                except RuntimeError:
+                    running = None
+
+                if running is not None:
+                    running.create_task(_run_compound())
+                elif self._loop is not None and not self._loop.is_closed():
+                    asyncio.run_coroutine_threadsafe(_run_compound(), self._loop)
+                else:
+                    self._whatsapp_fast_call_active = False
+                    self._whatsapp_fast_call_started = 0.0
+                    self._interrupted = False
+                    self.ui.write_log("ERR: Fast WhatsApp call-and-speak could not be scheduled.")
+                return True
+
         video_match = _re.fullmatch(
             r"(?:whatsapp )?video call (.+)", raw, flags=_re.IGNORECASE
         )
@@ -2542,10 +2672,6 @@ class JarvisLive:
             f"SYS: Fast WhatsApp {'video' if video_match else 'voice'} call starting for {contact}."
         )
 
-        # _try_fast_whatsapp_transcript can be called from either the async
-        # Live receive loop or Qt/UI worker threads. asyncio.create_task()
-        # only works when the current thread already owns a running loop.
-        # Always schedule onto JARVIS's real Live loop when called elsewhere.
         _video = bool(video_match)
         _coro = self._start_fast_whatsapp_call(contact, video=_video)
         try:
@@ -2558,8 +2684,6 @@ class JarvisLive:
         elif self._loop is not None and not self._loop.is_closed():
             asyncio.run_coroutine_threadsafe(_coro, self._loop)
         else:
-            # The Live session is not running, so close the coroutine instead of
-            # producing "coroutine was never awaited" during shutdown/startup.
             _coro.close()
             self._whatsapp_fast_call_active = False
             self._whatsapp_fast_call_started = 0.0
@@ -3240,8 +3364,14 @@ class JarvisLive:
                 # file_processor: fall back to the currently-uploaded file when none is given
                 if name == "file_processor" and not args.get("file_path") and self.ui.current_file:
                     args["file_path"] = self.ui.current_file
-                _ctx = {"player": self.ui, "speak": self.speak,
-                        "response": None, "session_memory": None}
+                _ctx = {
+                    "player": self.ui,
+                    "speak": self.speak,
+                    "speak_exact": self._queue_whatsapp_exact_speech,
+                    "set_call_active": self._set_whatsapp_call_active,
+                    "response": None,
+                    "session_memory": None,
+                }
                 r = await loop.run_in_executor(None, lambda: self._action_registry.run(name, args, _ctx))
                 result = r or "Done."
 
@@ -3400,7 +3530,7 @@ class JarvisLive:
             if self._ptt_enabled and not self._ptt_held:
                 return
 
-            if not self.ui.muted and not self._phone_active:
+            if not self.ui.muted and not self._phone_active and not self._whatsapp_call_active:
                 data = indata.tobytes()
                 now = time.monotonic()
                 level = _pcm_level(indata)
@@ -4103,6 +4233,19 @@ class JarvisLive:
     async def run(self):
         self._loop = asyncio.get_event_loop()
         self._reconnect_event = asyncio.Event()
+
+        # Start WhatsApp incoming-call monitoring for the whole JARVIS session,
+        # not only after Gemini happens to invoke the action once.
+        try:
+            from actions.whatsapp_calling import bind_runtime as _bind_whatsapp_runtime
+            _bind_whatsapp_runtime(
+                player=self.ui,
+                speak=self.speak,
+                speak_exact=self._queue_whatsapp_exact_speech,
+                set_call_active=self._set_whatsapp_call_active,
+            )
+        except Exception as exc:
+            self.ui.write_log(f"ERR: WhatsApp call monitor startup failed — {exc}")
 
         # ── Wire the shared core services to the interface ───────────────────
         # The confirmation gate is useless without a way to ask, and a memory
