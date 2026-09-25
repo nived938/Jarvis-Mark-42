@@ -661,6 +661,39 @@ def _paste_search_text(text: str) -> None:
         pyautogui.write(text, interval=0.04)
 
 
+def _active_chat_matches_contact(win, contact: str) -> bool:
+    """Verify that the requested contact is visible in the active right-side chat."""
+    target = _norm(contact)
+    if not target:
+        return False
+
+    try:
+        title = _norm(win.window_text())
+        if target in title:
+            return True
+    except Exception:
+        pass
+
+    try:
+        rect = win.rectangle()
+        right_start = rect.left + int(rect.width() * 0.45)
+        top_limit = rect.top + 220
+        for control in win.descendants(control_type="Text"):
+            labels = [_norm(x) for x in _labels(control)]
+            if not any(target == label or target in label for label in labels):
+                continue
+            try:
+                cr = control.rectangle()
+                if control.is_visible() and cr.left > right_start and cr.top < top_limit:
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    return False
+
+
 def _select_contact_chat(win, contact: str) -> bool:
     """Open the exact WhatsApp contact using Windows' New Chat shortcut."""
     contact = str(contact or "").strip()
@@ -691,7 +724,16 @@ def _select_contact_chat(win, contact: str) -> bool:
         time.sleep(0.15)
         pyautogui.press("enter")
         time.sleep(0.8)
-        return _active_chat_matches_contact(win, contact)
+        if _active_chat_matches_contact(win, contact):
+            return True
+
+        # Some WhatsApp builds do not expose the chat header name through UIA.
+        # In that case, the presence of the actual chat call controls in the
+        # right-side header is the only safe structural signal available to us.
+        return (
+            _find_chat_call_button(win, _VOICE_NAMES) is not None
+            or _find_chat_call_button(win, _VIDEO_NAMES) is not None
+        )
     except Exception as exc:
         print(f"[whatsapp_calling] Contact selection failed: {exc}")
         return False
