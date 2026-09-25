@@ -931,6 +931,7 @@ class JarvisLive:
         # Guard against Gemini issuing the same WhatsApp outgoing-call tool
         # twice for one spoken request, often with different capitalization.
         self._whatsapp_call_guard: dict[tuple[str, str], float] = {}
+        self._local_whatsapp_lock = threading.Lock()
         self._trace_id = trace_start_session()
 
         self._client_turn_started = 0.0
@@ -1359,11 +1360,9 @@ class JarvisLive:
         except Exception as exc:
             self.ui.write_log(f"ERR: WhatsApp call response failed — {exc}")
 
-        # Outgoing WhatsApp calls are intentionally NOT handled by the local
-        # text fast-path. The same spoken command can also arrive through
-        # Gemini Live tool calling, and running both paths can open WhatsApp
-        # twice or leave the first contact in the search box. The single
-        # whatsapp_calling action below is the source of truth for outgoing calls.
+        # Outgoing WhatsApp calls use the guarded fast path.
+        if self._try_fast_whatsapp_transcript(raw):
+            return True
 
         if any(k in low for k in ("wake up jarvis", "wake jarvis")):
             self.wake(reason="local command")
@@ -2314,6 +2313,65 @@ class JarvisLive:
             self.ui.write_log(f"ERR: Local command failed — {e}")
             return str(e)
 
+    def _mark_whatsapp_local_intent(self, action: str, contact: str) -> bool:
+        """Reserve one outgoing WhatsApp call intent for 90 seconds."""
+        action_key = str(action or "").strip().casefold()
+        contact_key = " ".join(str(contact or "").strip().casefold().split())
+        if not contact_key:
+            return False
+        key = (action_key, contact_key)
+        now = time.monotonic()
+        last = self._whatsapp_call_guard.get(key, 0.0)
+        if now - last < 90.0:
+            return False
+        self._whatsapp_call_guard[key] = now
+        return True
+
+    async def _start_fast_whatsapp_call(self, contact: str, video: bool = False) -> None:
+        action = "video_call" if video else "call"
+        result = await asyncio.to_thread(
+            self._run_local_action,
+            "whatsapp_calling",
+            {"action": action, "contact": contact},
+        )
+        self.ui.write_log("JARVIS: " + str(result))
+        # Keep the existing speech path for the final result only. The actual
+        # WhatsApp automation has already started immediately in the background.
+        self.speak("Sir, " + str(result))
+
+    def _try_fast_whatsapp_transcript(self, text: str) -> bool:
+        """Start exact WhatsApp call commands before Gemini tool selection."""
+        import re as _re
+        raw = " ".join(str(text or "").split()).strip()
+        if not raw:
+            return False
+
+        video_match = _re.fullmatch(
+            r"(?:whatsapp )?video call (.+)", raw, flags=_re.IGNORECASE
+        )
+        voice_match = _re.fullmatch(
+            r"(?:whatsapp )?call (.+)", raw, flags=_re.IGNORECASE
+        )
+        match = video_match or voice_match
+        if match is None:
+            return False
+
+        contact = match.group(1).strip()
+        if contact.casefold() in {"jarvis", "me", "a cab", "an uber", "a taxi", "someone"}:
+            return False
+
+        action = "video_call" if video_match else "call"
+        if not self._mark_whatsapp_local_intent(action, contact):
+            return True
+
+        self.interrupt()
+        self.ui.write_log(
+            f"SYS: Fast WhatsApp {'video' if video_match else 'voice'} call starting for {contact}."
+        )
+        asyncio.create_task(self._start_fast_whatsapp_call(contact, video=bool(video_match)))
+        return True
+
+
     def _on_emergency_state(self, reason: str) -> None:
         """React immediately when the emergency latch is engaged or released."""
         active = emergency_stop.is_active()
@@ -2702,8 +2760,8 @@ class JarvisLive:
                 _wa_last = self._whatsapp_call_guard.get(_wa_key, 0.0)
                 if _wa_contact and (_wa_now - _wa_last) < 90.0:
                     result = (
-                        f"WhatsApp call to {_wa_contact} was already started from the "
-                        "current request. Do not call the contact again."
+                        f"WhatsApp call to {_wa_contact} was already handled by the "
+                        "fast local call path. Do not call the contact again."
                     )
                     self.ui.write_log("SYS: " + result)
                     return types.FunctionResponse(
@@ -3325,6 +3383,14 @@ class JarvisLive:
                                 in_buf.append(txt)
                                 self._current_turn_text = " ".join(in_buf).strip()
                                 self._last_user_speech = time.monotonic()
+
+                                # Do not wait for Gemini to decide whether an
+                                # outgoing WhatsApp call is a tool request.
+                                # Start it as soon as the Live transcription
+                                # contains the complete call command.
+                                if self._try_fast_whatsapp_transcript(self._current_turn_text):
+                                    in_buf = []
+                                    self._current_turn_text = ""
                         if sc.turn_complete:
                             if self._turn_done_event:
                                 self._turn_done_event.set()
