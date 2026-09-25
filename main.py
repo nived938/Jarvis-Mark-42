@@ -3528,7 +3528,6 @@ class JarvisLive:
                                 # contains the complete call command.
                                 if self._try_fast_whatsapp_transcript(
                                     self._current_turn_text,
-                                    wait_for_live_turn=True,
                                 ):
                                     # The WhatsApp action is already running locally.
                                     # Drop any model audio/transcript belonging to this
