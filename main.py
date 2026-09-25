@@ -936,12 +936,6 @@ class JarvisLive:
         # no second Gemini speech round-trip is allowed for the same request.
         self._whatsapp_fast_call_active = False
         self._whatsapp_fast_call_started = 0.0
-        # When voice transcription triggers the local WhatsApp fast path,
-        # this event marks the end of the original "call X" Live turn. The
-        # normal JARVIS speech acknowledgement is sent only after that turn
-        # is fully suppressed, so its audio is never discarded by _interrupted.
-        self._whatsapp_fast_turn_done = threading.Event()
-        self._whatsapp_fast_turn_done.set()
         self._trace_id = trace_start_session()
 
         self._client_turn_started = 0.0
@@ -2337,11 +2331,75 @@ class JarvisLive:
         self._whatsapp_call_guard[key] = now
         return True
 
+    async def _speak_fast_ack_live(self, text: str) -> None:
+        """Speak a short local acknowledgement with the normal JARVIS Live voice.
+        
+        Uses a tiny separate Gemini Live session so the acknowledgement does not
+        become a new turn in the user's main conversation. Generated audio is fed
+        into JARVIS's existing playback queue, so the voice, speaker, waveform,
+        echo guard, and output pipeline remain exactly the same as normal JARVIS
+        speech.
+        """
+        if emergency_stop.is_active() or self.ui.muted:
+            return
+        if self.audio_in_queue is None:
+            self.ui.write_log("ERR: Fast acknowledgement skipped: audio output is unavailable.")
+            return
+
+        try:
+            _client = genai.Client(api_key=_get_api_key())
+            _voice = active_voice()
+            _cfg = types.LiveConnectConfig(
+                response_modalities=["AUDIO"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                            voice_name=_voice
+                        )
+                    )
+                ),
+            )
+
+            self.ui.write_log(
+                f"SYS: Fast acknowledgement using JARVIS Live voice { _voice }."
+            )
+
+            async with _client.aio.live.connect(
+                model=LIVE_MODEL,
+                config=_cfg,
+            ) as _session:
+                await _session.send_client_content(
+                    turns={
+                        "role": "user",
+                        "parts": [{
+                            "text": (
+                                "Speak exactly this sentence and nothing else: "
+                                + str(text)
+                            )
+                        }],
+                    },
+                    turn_complete=True,
+                )
+
+                async for _response in _session.receive():
+                    if _response.data:
+                        try:
+                            self.audio_in_queue.put_nowait(_response.data)
+                        except asyncio.QueueFull:
+                            pass
+
+                    if _response.server_content:
+                        if getattr(_response.server_content, "turn_complete", False):
+                            break
+
+            self.ui.write_log("SYS: Fast acknowledgement spoken with the normal JARVIS audio pipeline.")
+        except Exception as exc:
+            self.ui.write_log(f"ERR: Fast JARVIS acknowledgement failed — {exc}")
+
     async def _start_fast_whatsapp_call(
         self,
         contact: str,
         video: bool = False,
-        wait_for_live_turn: bool = False,
     ) -> None:
         action = "video_call" if video else "call"
         self._whatsapp_fast_call_active = True
@@ -2363,27 +2421,13 @@ class JarvisLive:
             )
 
             if str(result).lower().startswith(("voice call started", "video call started")):
-                if wait_for_live_turn:
-                    # The original voice command is deliberately suppressed.
-                    # Wait until its turn_complete arrives before using the
-                    # normal JARVIS speech path. Otherwise _interrupted would
-                    # also discard this acknowledgement's audio.
-                    try:
-                        await asyncio.wait_for(
-                            asyncio.to_thread(
-                                self._whatsapp_fast_turn_done.wait,
-                                2.0,
-                            ),
-                            timeout=2.5,
-                        )
-                    except asyncio.TimeoutError:
-                        # Do not leave the acknowledgement trapped forever if
-                        # the server does not emit turn_complete.
-                        pass
-                    self._interrupted = False
-
-                self.speak(
-                    f"Sir, the {'video' if video else 'voice'} call with {contact} has been started."
+                # Never send this through the main conversation. That would add
+                # another user/model turn to the chat. Use the normal JARVIS Live
+                # voice in an isolated session instead.
+                asyncio.create_task(
+                    self._speak_fast_ack_live(
+                        f"Sir, the {'video' if video else 'voice'} call with {contact} has been started."
+                    )
                 )
         except Exception as exc:
             self.ui.write_log(f"ERR: Fast WhatsApp call failed — {exc}")
@@ -2394,11 +2438,7 @@ class JarvisLive:
             self._client_turn_started = 0.0
             self._client_first_audio_logged = False
 
-    def _try_fast_whatsapp_transcript(
-        self,
-        text: str,
-        wait_for_live_turn: bool = False,
-    ) -> bool:
+    def _try_fast_whatsapp_transcript(self, text: str) -> bool:
         """Start exact WhatsApp call commands before Gemini tool selection."""
         import re as _re
         raw = " ".join(str(text or "").split()).strip()
@@ -2425,13 +2465,6 @@ class JarvisLive:
 
         self._whatsapp_fast_call_active = True
         self._whatsapp_fast_call_started = time.monotonic()
-        # This invocation came from Live input transcription, so suppress only
-        # Gemini's response to the original "call X" turn. The acknowledgement
-        # itself will be sent after that turn completes.
-        _wait_for_live_turn = wait_for_live_turn
-        if _wait_for_live_turn:
-            self._whatsapp_fast_turn_done.clear()
-
         # Silently stop any model audio belonging to this same command. This
         # replaces the old user-visible interrupt() call, which made JARVIS
         # announce "Interrupted — listening..." even though the call was already
@@ -2447,11 +2480,7 @@ class JarvisLive:
         # only works when the current thread already owns a running loop.
         # Always schedule onto JARVIS's real Live loop when called elsewhere.
         _video = bool(video_match)
-        _coro = self._start_fast_whatsapp_call(
-            contact,
-            video=_video,
-            wait_for_live_turn=_wait_for_live_turn,
-        )
+        _coro = self._start_fast_whatsapp_call(contact, video=_video)
         try:
             _running_loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -2468,7 +2497,6 @@ class JarvisLive:
             self._whatsapp_fast_call_active = False
             self._whatsapp_fast_call_started = 0.0
             self._interrupted = False
-            self._whatsapp_fast_turn_done.set()
             self.ui.write_log(
                 "ERR: Fast WhatsApp call could not be scheduled because "
                 "the JARVIS Live loop is not running."
@@ -3518,9 +3546,6 @@ class JarvisLive:
                             # If this turn_complete ends an interrupted response, clear the
                             # flag and skip all further processing for that turn.
                             if self._interrupted:
-                                # Release the fast-call acknowledgement only after
-                                # the original "call X" Live turn is finished.
-                                self._whatsapp_fast_turn_done.set()
                                 self._interrupted = False
                                 in_buf  = []
                                 out_buf = []
