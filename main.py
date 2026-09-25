@@ -932,6 +932,10 @@ class JarvisLive:
         # twice for one spoken request, often with different capitalization.
         self._whatsapp_call_guard: dict[tuple[str, str], float] = {}
         self._local_whatsapp_lock = threading.Lock()
+        # Fast WhatsApp calls are completed locally. While this flag is active,
+        # no second Gemini speech round-trip is allowed for the same request.
+        self._whatsapp_fast_call_active = False
+        self._whatsapp_fast_call_started = 0.0
         self._trace_id = trace_start_session()
 
         self._client_turn_started = 0.0
@@ -2329,15 +2333,29 @@ class JarvisLive:
 
     async def _start_fast_whatsapp_call(self, contact: str, video: bool = False) -> None:
         action = "video_call" if video else "call"
-        result = await asyncio.to_thread(
-            self._run_local_action,
-            "whatsapp_calling",
-            {"action": action, "contact": contact},
-        )
-        self.ui.write_log("JARVIS: " + str(result))
-        # Keep the existing speech path for the final result only. The actual
-        # WhatsApp automation has already started immediately in the background.
-        self.speak("Sir, " + str(result))
+        self._whatsapp_fast_call_active = True
+        self._whatsapp_fast_call_started = time.monotonic()
+        try:
+            result = await asyncio.to_thread(
+                self._run_local_action,
+                "whatsapp_calling",
+                {"action": action, "contact": contact},
+            )
+            elapsed = time.monotonic() - self._whatsapp_fast_call_started
+            # IMPORTANT: do not call self.speak() here. self.speak() injects a
+            # new turn into Gemini Live, which can take tens of seconds and made
+            # a local WhatsApp call look slow even after the button was clicked.
+            self.ui.write_log(
+                f"JARVIS: {result} (local WhatsApp path {elapsed:.2f}s)"
+            )
+        except Exception as exc:
+            self.ui.write_log(f"ERR: Fast WhatsApp call failed — {exc}")
+        finally:
+            self._whatsapp_fast_call_active = False
+            self._whatsapp_fast_call_started = 0.0
+            # Do not let the local call path inherit a stale model-turn timer.
+            self._client_turn_started = 0.0
+            self._client_first_audio_logged = False
 
     def _try_fast_whatsapp_transcript(self, text: str) -> bool:
         """Start exact WhatsApp call commands before Gemini tool selection."""
@@ -2364,7 +2382,8 @@ class JarvisLive:
         if not self._mark_whatsapp_local_intent(action, contact):
             return True
 
-        self.interrupt()
+        self._whatsapp_fast_call_active = True
+        self._whatsapp_fast_call_started = time.monotonic()
         self.ui.write_log(
             f"SYS: Fast WhatsApp {'video' if video_match else 'voice'} call starting for {contact}."
         )
@@ -2791,6 +2810,7 @@ class JarvisLive:
                         id=fc.id,
                         name=name,
                         response={"result": result, "blocked": True, "duplicate": True},
+                        scheduling="SILENT",
                     )
                 self._whatsapp_call_guard[_wa_key] = _wa_now
 
@@ -3412,8 +3432,15 @@ class JarvisLive:
                                 # Start it as soon as the Live transcription
                                 # contains the complete call command.
                                 if self._try_fast_whatsapp_transcript(self._current_turn_text):
+                                    # The WhatsApp action is already running locally.
+                                    # Drop any model audio/transcript belonging to this
+                                    # command instead of waiting for a second Gemini turn.
+                                    self._interrupted = True
+                                    self._visemes.reset()
+                                    out_buf = []
                                     in_buf = []
                                     self._current_turn_text = ""
+                                    self._client_turn_started = 0.0
                         if sc.turn_complete:
                             if self._turn_done_event:
                                 self._turn_done_event.set()
