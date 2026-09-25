@@ -4491,6 +4491,19 @@ class MainWindow(QMainWindow):
         sc_intr = QShortcut(QKeySequence("Escape"), self)
         sc_intr.activated.connect(self._do_interrupt)
 
+    def closeEvent(self, event) -> None:
+        """Stop the Android cast process before JARVIS exits."""
+        try:
+            # scrcpy is a separate process, so explicitly terminate it before
+            # Qt destroys the HUD that hosts its native window.
+            self.stop_android_cast()
+        except Exception as exc:
+            self.write_log(f"ERR: Could not stop Android cast on exit — {exc}")
+        try:
+            super().closeEvent(event)
+        except Exception:
+            event.accept()
+
     def _on_emergency_button(self) -> None:
         try:
             cb = self.on_emergency_kill
