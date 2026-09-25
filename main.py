@@ -2368,7 +2368,30 @@ class JarvisLive:
         self.ui.write_log(
             f"SYS: Fast WhatsApp {'video' if video_match else 'voice'} call starting for {contact}."
         )
-        asyncio.create_task(self._start_fast_whatsapp_call(contact, video=bool(video_match)))
+
+        # _try_fast_whatsapp_transcript can be called from either the async
+        # Live receive loop or Qt/UI worker threads. asyncio.create_task()
+        # only works when the current thread already owns a running loop.
+        # Always schedule onto JARVIS's real Live loop when called elsewhere.
+        _video = bool(video_match)
+        _coro = self._start_fast_whatsapp_call(contact, video=_video)
+        try:
+            _running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            _running_loop = None
+
+        if _running_loop is not None:
+            _running_loop.create_task(_coro)
+        elif self._loop is not None and not self._loop.is_closed():
+            asyncio.run_coroutine_threadsafe(_coro, self._loop)
+        else:
+            # The Live session is not running, so close the coroutine instead of
+            # producing "coroutine was never awaited" during shutdown/startup.
+            _coro.close()
+            self.ui.write_log(
+                "ERR: Fast WhatsApp call could not be scheduled because "
+                "the JARVIS Live loop is not running."
+            )
         return True
 
 
