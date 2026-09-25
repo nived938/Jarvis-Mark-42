@@ -133,7 +133,22 @@ def _is_whatsapp_window(win) -> bool:
         title = _norm(win.window_text())
     except Exception:
         title = ""
-    return "whatsapp" in title
+
+    if "whatsapp" in title:
+        return True
+
+    # Some WhatsApp call popups use only the contact name as their window
+    # title. Fall back to the owning process name so those popups are still
+    # visible to the incoming-call watcher.
+    try:
+        pid = int(win.process_id())
+        if psutil is not None:
+            process_name = _norm(psutil.Process(pid).name())
+            if process_name in {"whatsapp.exe", "whatsapp"}:
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def _whatsapp_windows() -> list:
