@@ -77,15 +77,13 @@ def _compress_silence(
     return np.concatenate(out) if out else arr
 
 
-def _play_np(samples, sample_rate: int) -> None:
-    """Play float32 mono (or stereo) audio via sounddevice.
-    Accepts numpy arrays or PyTorch tensors.
-    """
-    sd.play(_to_numpy(samples), sample_rate)
+def _play_np(samples, sample_rate: int, device=None) -> None:
+    """Play float32 mono (or stereo) audio through the requested device."""
+    sd.play(_to_numpy(samples), sample_rate, device=device or None)
     sd.wait()
 
 
-def _play_audio_bytes(audio_bytes: bytes) -> None:
+def _play_audio_bytes(audio_bytes: bytes, device=None) -> None:
     """Decode MP3/WAV/OGG bytes and play via sounddevice (uses miniaudio)."""
     import miniaudio
     decoded = miniaudio.decode(
@@ -94,7 +92,7 @@ def _play_audio_bytes(audio_bytes: bytes) -> None:
         nchannels=1,
     )
     samples = np.array(decoded.samples, dtype=np.float32)
-    sd.play(samples, decoded.sample_rate)
+    sd.play(samples, decoded.sample_rate, device=device or None)
     sd.wait()
 
 
@@ -105,8 +103,9 @@ def _play_audio_bytes(audio_bytes: bytes) -> None:
 class EdgeTTSEngine:
     """Microsoft EdgeTTS – free, requires internet."""
 
-    def __init__(self, voice: str = "en-US-GuyNeural"):
+    def __init__(self, voice: str = "en-US-GuyNeural", output_device=None):
         self.voice = voice
+        self.output_device = output_device
 
     def speak(self, text: str) -> None:
         loop = asyncio.new_event_loop()
@@ -115,7 +114,7 @@ class EdgeTTSEngine:
         finally:
             loop.close()
         if audio_bytes:
-            _play_audio_bytes(audio_bytes)
+            _play_audio_bytes(audio_bytes, device=self.output_device)
 
     async def _synth(self, text: str) -> bytes:
         import edge_tts
@@ -223,9 +222,10 @@ class KokoroTTSEngine:
     the first real speak() call has zero compilation overhead.
     """
 
-    def __init__(self, voice: str = "af_heart", speed: float = 1.0):
+    def __init__(self, voice: str = "af_heart", speed: float = 1.0, output_device=None):
         self.voice     = voice
         self.speed     = speed
+        self.output_device = output_device
         self._pipeline = None
         self._lock     = threading.Lock()
         self._init()   # blocking, but called from background thread
@@ -342,7 +342,7 @@ class KokoroTTSEngine:
             arr = audio_q.get()
             if arr is None:
                 break
-            _play_np(arr, 24000)
+            _play_np(arr, 24000, device=self.output_device)
 
         synth_thread.join()
 
@@ -353,9 +353,10 @@ class KokoroTTSEngine:
 class ElevenLabsTTSEngine:
     """ElevenLabs cloud TTS – API key required."""
 
-    def __init__(self, api_key: str, voice_id: str = "pNInz6obpgDQGcFmaJgB"):
+    def __init__(self, api_key: str, voice_id: str = "pNInz6obpgDQGcFmaJgB", output_device=None):
         self.api_key  = api_key
         self.voice_id = voice_id
+        self.output_device = output_device
 
     def speak(self, text: str) -> None:
         import requests
@@ -373,7 +374,7 @@ class ElevenLabsTTSEngine:
             json=payload, headers=headers, timeout=30,
         )
         resp.raise_for_status()
-        _play_audio_bytes(resp.content)
+        _play_audio_bytes(resp.content, device=self.output_device)
 
 
 # ---------------------------------------------------------------------------
@@ -428,15 +429,27 @@ class TTSPlayer:
 
 def create_tts_player(config: dict) -> TTSPlayer:
     engine_name = config.get("tts_engine", "edgetts").lower()
+    output_device = config.get("output_device") or None
     if engine_name == "kokoro":
         voice  = config.get("tts_voice", "af_heart")
         speed  = float(config.get("tts_speed", 1.0))
-        engine = KokoroTTSEngine(voice=voice, speed=speed)
+        engine = KokoroTTSEngine(
+            voice=voice,
+            speed=speed,
+            output_device=output_device,
+        )
     elif engine_name == "elevenlabs":
         api_key  = config.get("elevenlabs_api_key", "")
         voice_id = config.get("tts_voice", "pNInz6obpgDQGcFmaJgB")
-        engine   = ElevenLabsTTSEngine(api_key=api_key, voice_id=voice_id)
+        engine   = ElevenLabsTTSEngine(
+            api_key=api_key,
+            voice_id=voice_id,
+            output_device=output_device,
+        )
     else:   # edgetts (default)
         voice  = config.get("tts_voice", "en-US-GuyNeural")
-        engine = EdgeTTSEngine(voice=voice)
+        engine = EdgeTTSEngine(
+            voice=voice,
+            output_device=output_device,
+        )
     return TTSPlayer(engine)
