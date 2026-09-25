@@ -7835,6 +7835,39 @@ class JarvisUI:
         except Exception:
             return False
 
+    def is_android_cast_hud_open(self) -> bool:
+        """Return whether the Android scrcpy HUD is currently active."""
+        try:
+            return bool(self._win.is_android_cast_hud_open())
+        except Exception:
+            return False
+
+    def start_android_cast(self, serial: str = "", audio: bool = False) -> str:
+        """Start the Android scrcpy mirror inside the JARVIS HUD."""
+        try:
+            return str(
+                self._win.start_android_cast(
+                    serial=str(serial or ""),
+                    audio=bool(audio),
+                )
+            )
+        except Exception as exc:
+            return f"Could not start Android cast: {exc}"
+
+    def stop_android_cast(self) -> str:
+        """Stop the Android scrcpy mirror and close its HUD."""
+        try:
+            return str(self._win.stop_android_cast())
+        except Exception as exc:
+            return f"Could not stop Android cast: {exc}"
+
+    def android_cast_status(self) -> str:
+        """Return the current Android scrcpy HUD status."""
+        try:
+            return str(self._win.android_cast_status())
+        except Exception as exc:
+            return f"Could not read Android cast status: {exc}"
+
     def show_geoapify_maps(self, query: str = "") -> None:
         """Thread-safe: open/search the Geoapify map HUD."""
         try:
