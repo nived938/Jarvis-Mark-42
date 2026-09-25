@@ -633,7 +633,50 @@ def _has_call_duration_timer(labels: list[str]) -> bool:
     return False
 
 
-def _call_ui_snapshot(win) -> tuple[list[str], bool, bool, bool, bool]:
+def _visual_connected_call_state(win) -> bool:
+    """Detect the connected-call visual cue when UI Automation cannot see it.
+
+    In the user's WhatsApp Desktop connected-call window, a short green status
+    line appears above the elapsed timer. The pre-answer "Ringing..." window does
+    not have that green status line. We only inspect the center of the WhatsApp
+    call window, so the detector does not depend on the desktop background.
+    """
+    if not _PYAUTOGUI:
+        return False
+
+    try:
+        rect = win.rectangle()
+        left = int(rect.left)
+        top = int(rect.top)
+        width = max(1, int(rect.width()))
+        height = max(1, int(rect.height()))
+
+        # Connected call status is rendered around the middle of the floating
+        # call window. Relative coordinates make this work when the window moves.
+        crop_left = left + int(width * 0.30)
+        crop_top = top + int(height * 0.48)
+        crop_width = max(1, int(width * 0.40))
+        crop_height = max(1, int(height * 0.25))
+
+        image = pyautogui.screenshot(
+            region=(crop_left, crop_top, crop_width, crop_height)
+        )
+        rgb = image.convert("RGB")
+
+        green_pixels = 0
+        for r, g, b in rgb.getdata():
+            if g >= 105 and g >= r * 1.35 and g >= b * 1.20:
+                green_pixels += 1
+
+        # The connected screenshot contains multiple bright green pixels in
+        # the dotted connection indicator. Use a conservative threshold so a
+        # single anti-aliased icon pixel cannot trigger the state.
+        return green_pixels >= 18
+    except Exception:
+        return False
+
+
+def _call_ui_snapshot(win) -> tuple[list[str], bool, bool, bool, bool, bool]:
     """Return UI state signals for a WhatsApp call window.
 
     Returns:
@@ -641,7 +684,8 @@ def _call_ui_snapshot(win) -> tuple[list[str], bool, bool, bool, bool]:
         has_duration,
         is_preconnect,
         has_call_controls,
-        has_explicit_connected_state
+        has_explicit_connected_state,
+        visual_connected
     """
     labels = [_norm(x) for x in _all_visible_text(win)]
     joined = " ".join(labels)
@@ -676,12 +720,15 @@ def _call_ui_snapshot(win) -> tuple[list[str], bool, bool, bool, bool]:
     )
     has_explicit_connected_state = any(marker in joined for marker in connected_markers)
 
+    visual_connected = _visual_connected_call_state(win)
+
     return (
         labels,
         has_duration,
         is_preconnect,
         has_call_controls,
         has_explicit_connected_state,
+        visual_connected,
     )
 
 
@@ -693,9 +740,10 @@ def _connected_call_state(win) -> bool:
         is_preconnect,
         has_call_controls,
         has_explicit_connected_state,
+        visual_connected,
     ) = _call_ui_snapshot(win)
 
-    if has_duration or has_explicit_connected_state:
+    if has_duration or has_explicit_connected_state or visual_connected:
         return True
 
     if is_preconnect:
@@ -1178,8 +1226,15 @@ def _wait_for_connected_call(timeout: float = 60.0) -> bool:
 
         for win in windows:
             try:
-                labels, has_duration, is_preconnect, has_controls, explicit = _call_ui_snapshot(win)
-                if has_duration or explicit:
+                (
+                    labels,
+                    has_duration,
+                    is_preconnect,
+                    has_controls,
+                    explicit,
+                    visual_connected,
+                ) = _call_ui_snapshot(win)
+                if has_duration or explicit or visual_connected:
                     connected = True
                     current_has_call_window = True
                     break
