@@ -75,7 +75,10 @@ def classify_message(message: dict) -> tuple[str, int, list[str]]:
 
 
 def _candidate_messages(query: str, limit: int):
-    svc = _service_obj()
+    try:
+        svc = _service_obj()
+    except Exception as exc:
+        return exc
     q = query or "in:inbox"
     ids = svc.users().messages().list(
         userId="me", q=q, maxResults=max(1, min(limit, 50))
@@ -98,6 +101,8 @@ def _handler(parameters=None, **_):
             str(p.get("query", "in:inbox")).strip() or "in:inbox",
             limit,
         )
+        if isinstance(msgs, Exception):
+            return f"Gmail authorization is required. Say 'authorize Gmail'. ({msgs})"
         rows = []
         store = {"updated": time.time(), "items": []}
 
@@ -160,9 +165,12 @@ def _handler(parameters=None, **_):
         message_id = str(p.get("message_id", "")).strip()
         if not message_id:
             return "Provide message_id."
-        msg = _service_obj().users().messages().get(
-            userId="me", id=message_id, format="full"
-        ).execute()
+        try:
+            msg = _service_obj().users().messages().get(
+                userId="me", id=message_id, format="full"
+            ).execute()
+        except Exception as exc:
+            return f"Gmail authorization is required or the message could not be read: {exc}"
         category, priority, hits = classify_message(msg)
         return (
             _format(msg, include_body=True)
