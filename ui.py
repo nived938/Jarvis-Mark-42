@@ -3435,9 +3435,9 @@ def _find_window_for_process(pid: int, title: str = "") -> int:
 class AndroidCastHudView(QWidget):
     """Full-center Android mirror hosted inside the JARVIS HUD.
 
-    The foreign/native scrcpy window remains the actual renderer and input
-    surface. Qt hosts it as a window container, so the user's mouse and
-    keyboard go straight to the phone mirror.
+    scrcpy owns the real renderer. On Windows its native top-level HWND is
+    re-parented into the HUD host frame so it is a real child of JARVIS rather
+    than a second desktop window. Mouse and keyboard input stay native.
     """
 
     closed = pyqtSignal()
@@ -3506,8 +3506,10 @@ class AndroidCastHudView(QWidget):
         self._host_layout.addWidget(self._placeholder)
         root.addWidget(self._host, stretch=1)
 
-        self._foreign_window = None
-        self._container = None
+        self._foreign_hwnd = 0
+        self._foreign_parent = 0
+        self._foreign_style = None
+        self._foreign_exstyle = None
 
     def set_status(self, text: str, ok: bool = False) -> None:
         self._status.setText(str(text).upper())
@@ -3515,30 +3517,100 @@ class AndroidCastHudView(QWidget):
             f"color: {C.GREEN if ok else C.ACC}; background: transparent;"
         )
 
+    def _resize_native_window(self) -> None:
+        hwnd = int(self._foreign_hwnd or 0)
+        if os.name != "nt" or not hwnd:
+            return
+        try:
+            user32 = ctypes.windll.user32
+            SWP_NOZORDER = 0x0004
+            SWP_NOACTIVATE = 0x0010
+            SWP_SHOWWINDOW = 0x0040
+            width = max(1, int(self._host.width()))
+            height = max(1, int(self._host.height()))
+            user32.SetWindowPos(
+                ctypes.wintypes.HWND(hwnd),
+                ctypes.wintypes.HWND(0),
+                0, 0, width, height,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            )
+        except Exception:
+            pass
+
     def attach_native_window(self, hwnd: int) -> bool:
         if os.name != "nt" or not hwnd:
             self.set_status("UNAVAILABLE")
             return False
         try:
             self.detach_native_window()
-            foreign = QWindow.fromWinId(int(hwnd))
-            if foreign is None:
+
+            user32 = ctypes.windll.user32
+            hwnd = int(hwnd)
+            host_hwnd = int(self._host.winId())
+            if not user32.IsWindow(ctypes.wintypes.HWND(hwnd)):
                 self.set_status("EMBED FAILED")
                 return False
 
-            container = QWidget.createWindowContainer(foreign, self._host)
-            container.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-            container.setSizePolicy(
-                QSizePolicy.Policy.Expanding,
-                QSizePolicy.Policy.Expanding,
-            )
-            self._host_layout.addWidget(container, stretch=1)
-            self._placeholder.hide()
-            container.show()
-            container.setFocus(Qt.FocusReason.OtherFocusReason)
+            GWL_STYLE = -16
+            GWL_EXSTYLE = -20
+            WS_CHILD = 0x40000000
+            WS_VISIBLE = 0x10000000
+            WS_CAPTION = 0x00C00000
+            WS_THICKFRAME = 0x00040000
+            WS_MINIMIZEBOX = 0x00020000
+            WS_MAXIMIZEBOX = 0x00010000
+            WS_SYSMENU = 0x00080000
+            WS_POPUP = 0x80000000
+            WS_BORDER = 0x00800000
+            WS_EX_APPWINDOW = 0x00040000
+            WS_EX_TOOLWINDOW = 0x00000080
+            SWP_FRAMECHANGED = 0x0020
+            SWP_NOZORDER = 0x0004
+            SWP_NOACTIVATE = 0x0010
+            SWP_SHOWWINDOW = 0x0040
 
-            self._foreign_window = foreign
-            self._container = container
+            original_parent = int(user32.GetParent(ctypes.wintypes.HWND(hwnd)) or 0)
+            original_style = int(user32.GetWindowLongPtrW(
+                ctypes.wintypes.HWND(hwnd), GWL_STYLE
+            ))
+            original_exstyle = int(user32.GetWindowLongPtrW(
+                ctypes.wintypes.HWND(hwnd), GWL_EXSTYLE
+            ))
+
+            child_style = (
+                original_style
+                & ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME |
+                    WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_BORDER)
+            ) | WS_CHILD | WS_VISIBLE
+            child_exstyle = (
+                original_exstyle & ~WS_EX_APPWINDOW
+            ) | WS_EX_TOOLWINDOW
+
+            user32.SetParent(
+                ctypes.wintypes.HWND(hwnd),
+                ctypes.wintypes.HWND(host_hwnd),
+            )
+            user32.SetWindowLongPtrW(
+                ctypes.wintypes.HWND(hwnd), GWL_STYLE, child_style
+            )
+            user32.SetWindowLongPtrW(
+                ctypes.wintypes.HWND(hwnd), GWL_EXSTYLE, child_exstyle
+            )
+
+            self._foreign_hwnd = hwnd
+            self._foreign_parent = original_parent
+            self._foreign_style = original_style
+            self._foreign_exstyle = original_exstyle
+
+            self._placeholder.hide()
+            user32.ShowWindow(ctypes.wintypes.HWND(hwnd), 5)
+            user32.SetWindowPos(
+                ctypes.wintypes.HWND(hwnd),
+                ctypes.wintypes.HWND(0),
+                0, 0, max(1, self._host.width()), max(1, self._host.height()),
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
+            )
+            user32.SetFocus(ctypes.wintypes.HWND(hwnd))
             self.set_status("LIVE • DIRECT CONTROL", ok=True)
             return True
         except Exception as exc:
@@ -3552,15 +3624,44 @@ class AndroidCastHudView(QWidget):
             return False
 
     def detach_native_window(self) -> None:
-        try:
-            if self._container is not None:
-                self._container.setParent(None)
-                self._container.deleteLater()
-        except Exception:
-            pass
-        self._container = None
-        self._foreign_window = None
+        hwnd = int(self._foreign_hwnd or 0)
+        if os.name == "nt" and hwnd:
+            try:
+                user32 = ctypes.windll.user32
+                GWL_STYLE = -16
+                GWL_EXSTYLE = -20
+                SWP_NOZORDER = 0x0004
+                SWP_NOACTIVATE = 0x0010
+                SWP_SHOWWINDOW = 0x0040
+                parent = ctypes.wintypes.HWND(int(self._foreign_parent or 0))
+                user32.SetParent(ctypes.wintypes.HWND(hwnd), parent)
+                if self._foreign_style is not None:
+                    user32.SetWindowLongPtrW(
+                        ctypes.wintypes.HWND(hwnd), GWL_STYLE,
+                        int(self._foreign_style)
+                    )
+                if self._foreign_exstyle is not None:
+                    user32.SetWindowLongPtrW(
+                        ctypes.wintypes.HWND(hwnd), GWL_EXSTYLE,
+                        int(self._foreign_exstyle)
+                    )
+                user32.SetWindowPos(
+                    ctypes.wintypes.HWND(hwnd),
+                    ctypes.wintypes.HWND(0),
+                    0, 0, 1, 1,
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                )
+            except Exception:
+                pass
+        self._foreign_hwnd = 0
+        self._foreign_parent = 0
+        self._foreign_style = None
+        self._foreign_exstyle = None
         self._placeholder.show()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._resize_native_window()
 
     def reset(self) -> None:
         self.detach_native_window()
@@ -4171,6 +4272,7 @@ class MainWindow(QMainWindow):
     _stopwatch_start_sig = pyqtSignal(float)
     _stopwatch_stop_sig = pyqtSignal()
     _jarvis_move_monitor_sig = pyqtSignal(int, object, object)
+    _android_cast_start_sig = pyqtSignal(str, bool)
     _android_cast_attach_sig = pyqtSignal(int)
     _android_cast_detach_sig = pyqtSignal()
 
@@ -4385,10 +4487,12 @@ class MainWindow(QMainWindow):
         self._stopwatch_start_sig.connect(self._start_stopwatch_on_qt_thread)
         self._stopwatch_stop_sig.connect(self._stop_stopwatch_on_qt_thread)
         self._jarvis_move_monitor_sig.connect(self._move_jarvis_window_on_qt_thread)
+        self._android_cast_start_sig.connect(self._start_android_cast_on_qt_thread)
         self._android_cast_attach_sig.connect(self._attach_android_cast_on_qt_thread)
         self._android_cast_detach_sig.connect(self._detach_android_cast_on_qt_thread)
         self._android_cast_proc = None
         self._android_cast_hwnd = 0
+        self._android_cast_starting = False
         self._android_cast_lock = threading.Lock()
         self._android_cast_thread = None
         self._cam_stop = threading.Event()
@@ -4719,9 +4823,15 @@ class MainWindow(QMainWindow):
         except Exception:
             return False
 
+    def is_android_cast_hud_open(self) -> bool:
+        try:
+            return self._hud_cam_stack.currentIndex() == 6
+        except Exception:
+            return False
+
     def is_any_hud_open(self) -> bool:
         try:
-            return self._hud_cam_stack.currentIndex() in (1, 2, 3, 4, 5)
+            return self._hud_cam_stack.currentIndex() in (1, 2, 3, 4, 5, 6)
         except Exception:
             return False
 
@@ -4750,6 +4860,27 @@ class MainWindow(QMainWindow):
                 pass
 
 
+    def _start_android_cast_on_qt_thread(self, serial: str, audio: bool) -> None:
+        with self._android_cast_lock:
+            if not self._android_cast_starting:
+                return
+        try:
+            self._android_cast_hud.reset()
+            self._hud_cam_stack.setCurrentIndex(6)
+            t = threading.Thread(
+                target=self._android_cast_worker,
+                args=(str(serial or "").strip(), bool(audio)),
+                daemon=True,
+                name="android-scrcpy-cast",
+            )
+            self._android_cast_thread = t
+            t.start()
+        except Exception as exc:
+            with self._android_cast_lock:
+                self._android_cast_starting = False
+            self.write_log(f"ERR: Could not start Android cast — {exc}")
+            self._android_cast_detach_sig.emit()
+
     def _attach_android_cast_on_qt_thread(self, hwnd: int) -> None:
         """Embed the already-running scrcpy window into the center HUD."""
         try:
@@ -4774,6 +4905,8 @@ class MainWindow(QMainWindow):
         """Launch scrcpy and locate its native window off the Qt GUI thread."""
         scrcpy = _find_android_scrcpy()
         if not scrcpy:
+            with self._android_cast_lock:
+                self._android_cast_starting = False
             self.write_log("ERR: scrcpy was not found on PATH.")
             self._android_cast_detach_sig.emit()
             return
@@ -4800,12 +4933,15 @@ class MainWindow(QMainWindow):
                 creationflags=creationflags,
             )
         except Exception as exc:
+            with self._android_cast_lock:
+                self._android_cast_starting = False
             self.write_log(f"ERR: Could not start scrcpy — {exc}")
             self._android_cast_detach_sig.emit()
             return
 
         with self._android_cast_lock:
             self._android_cast_proc = proc
+            self._android_cast_starting = False
 
         hwnd = 0
         for _ in range(50):
@@ -4851,24 +4987,21 @@ class MainWindow(QMainWindow):
     def start_android_cast(self, serial: str = "", audio: bool = False) -> str:
         with self._android_cast_lock:
             if self._android_cast_proc is not None and self._android_cast_proc.poll() is None:
-                if self._hud_cam_stack.currentIndex() == 6:
-                    return "Android cast is already open in the JARVIS HUD."
-                return "An Android cast is already running."
+                return "Android cast is already open in the JARVIS HUD."
+            if self._android_cast_starting:
+                return "Android cast is already starting in the JARVIS HUD."
+            self._android_cast_starting = True
 
-        self._android_cast_hud.reset()
-        self._hud_cam_stack.setCurrentIndex(6)
-        self._android_cast_thread = threading.Thread(
-            target=self._android_cast_worker,
-            args=(str(serial or "").strip(), bool(audio)),
-            daemon=True,
-            name="android-scrcpy-cast",
+        self._android_cast_start_sig.emit(
+            str(serial or "").strip(),
+            bool(audio),
         )
-        self._android_cast_thread.start()
         return "Android cast is starting inside the JARVIS HUD."
 
     def stop_android_cast(self) -> str:
         proc = None
         with self._android_cast_lock:
+            self._android_cast_starting = False
             proc = self._android_cast_proc
             self._android_cast_proc = None
             self._android_cast_hwnd = 0
