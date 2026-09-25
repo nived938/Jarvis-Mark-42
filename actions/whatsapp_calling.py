@@ -660,127 +660,40 @@ def _paste_search_text(text: str) -> None:
         pyautogui.write(text, interval=0.04)
 
 
-def _find_whatsapp_search_box(win):
-    """Find WhatsApp's contact-search edit control in the left sidebar."""
-    try:
-        edits = list(win.descendants(control_type="Edit"))
-    except Exception:
-        return None
-
-    matches = []
-    for edit in edits:
-        labels = [_norm(x) for x in _labels(edit)]
-        joined = " ".join(labels)
-        if "search" not in joined:
-            continue
-        try:
-            if edit.is_visible() and edit.is_enabled():
-                matches.append(edit)
-        except Exception:
-            continue
-
-    if not matches:
-        return None
-
-    try:
-        return sorted(
-            matches,
-            key=lambda control: (
-                control.rectangle().top,
-                control.rectangle().left,
-            ),
-        )[0]
-    except Exception:
-        return matches[0]
-
-
-def _active_chat_matches_contact(win, contact: str) -> bool:
-    """Verify the requested contact is visible in the right-side chat area."""
-    target = _norm(contact)
-    if not target:
-        return False
-
-    try:
-        title = _norm(win.window_text())
-        if target in title:
-            return True
-    except Exception:
-        pass
-
-    try:
-        win_rect = win.rectangle()
-        right_start = win_rect.left + int(win_rect.width() * 0.45)
-        top_limit = win_rect.top + 220
-        for control in win.descendants():
-            labels = [_norm(x) for x in _labels(control)]
-            if not any(target in label for label in labels):
-                continue
-            rect = control.rectangle()
-            if (
-                control.is_visible()
-                and rect.left > right_start
-                and rect.top < top_limit
-            ):
-                return True
-    except Exception:
-        pass
-
-    return False
-
-
 def _select_contact_chat(win, contact: str) -> bool:
-    """Select the requested WhatsApp chat using the real search field and keyboard fallback."""
-    target = _norm(contact)
-    search = _find_whatsapp_search_box(win)
-    if search is None:
+    """Open the exact WhatsApp contact using Windows' New Chat shortcut."""
+    contact = str(contact or "").strip()
+    if not contact:
         return False
 
     try:
         _focus_whatsapp(win)
-        search.click_input()
-        time.sleep(0.15)
-        pyautogui.hotkey("ctrl", "a")
-        pyautogui.press("backspace")
-        time.sleep(0.1)
+
+        # WhatsApp for Windows documents Ctrl+Alt+N as "New chat". This is
+        # safer than Ctrl+F because Ctrl+F is for searching chat content.
+        pyautogui.hotkey("ctrl", "alt", "n")
+        time.sleep(0.6)
+
+        # The New Chat dialog has a search field. Typing the exact contact and
+        # pressing Enter selects the first matching contact from that dialog.
         _paste_search_text(contact)
-        time.sleep(0.75)
-
-        # WhatsApp's Store/Desktop builds do not always expose search results
-        # as accessible controls. In that case, use the search field's normal
-        # keyboard selection instead of waiting for an inaccessible ListItem.
-        pyautogui.press("down")
-        time.sleep(0.15)
+        time.sleep(0.8)
         pyautogui.press("enter")
-        time.sleep(0.85)
-    except Exception:
+        time.sleep(0.9)
+
+        # Some builds require one Down before Enter because the search field
+        # itself still owns focus. Try that only if the first Enter did not
+        # move into a conversation.
+        if _find_chat_call_button(win, _VOICE_NAMES) is None and _find_chat_call_button(win, _VIDEO_NAMES) is None:
+            pyautogui.press("down")
+            time.sleep(0.15)
+            pyautogui.press("enter")
+            time.sleep(0.8)
+
+        return _active_chat_matches_contact(win, contact)
+    except Exception as exc:
+        print(f"[whatsapp_calling] Contact selection failed: {exc}")
         return False
-
-    # Prefer a direct UIA verification of the requested contact in the main
-    # conversation header. This prevents a neighboring contact from being
-    # mistaken for the requested one.
-    deadline = time.monotonic() + 1.8
-    while time.monotonic() < deadline:
-        try:
-            win_rect = win.rectangle()
-            header_left = win_rect.left + int(win_rect.width() * 0.45)
-            for control in win.descendants():
-                labels = [_norm(x) for x in _labels(control)]
-                if target not in labels:
-                    continue
-                rect = control.rectangle()
-                if (
-                    control.is_visible()
-                    and rect.left > header_left
-                    and rect.top < win_rect.top + 220
-                ):
-                    return True
-        except Exception:
-            pass
-        time.sleep(0.15)
-
-    # Do not guess here. A cached call button is safe to use only after the
-    # requested contact is verifiably visible in the active chat header.
-    return _active_chat_matches_contact(win, contact)
 
 
 def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
