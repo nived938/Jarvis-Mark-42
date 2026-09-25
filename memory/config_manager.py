@@ -115,6 +115,21 @@ def save_local_ai_model(model: str) -> None:
     _save_flag("local_ai_model", str(model or "").strip())
 
 
+def get_local_ai_mode() -> str:
+    """Return the local Ollama routing mode."""
+    value = str(load_api_keys().get("local_ai_mode", "balanced") or "balanced").strip().lower()
+    return value if value in {"fast", "balanced", "smart", "vision"} else "balanced"
+
+
+def save_local_ai_mode(mode: str) -> None:
+    """Persist the preferred local Ollama routing mode."""
+    value = str(mode or "balanced").strip().lower()
+    _save_flag(
+        "local_ai_mode",
+        value if value in {"fast", "balanced", "smart", "vision"} else "balanced",
+    )
+
+
 def get_local_ai_enabled() -> bool:
     """Whether JARVIS may use the local Ollama fallback/router."""
     return bool(load_api_keys().get("local_ai_enabled", True))
