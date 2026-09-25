@@ -936,11 +936,6 @@ class JarvisLive:
         # no second Gemini speech round-trip is allowed for the same request.
         self._whatsapp_fast_call_active = False
         self._whatsapp_fast_call_started = 0.0
-        # Local TTS for instant acknowledgements that must not make a Gemini
-        # round trip. Initialized lazily on the first fast local speech request.
-        self._local_tts = None
-        self._local_tts_lock = threading.Lock()
-        self._local_tts_speaking = False
         self._trace_id = trace_start_session()
 
         self._client_turn_started = 0.0
@@ -2336,88 +2331,108 @@ class JarvisLive:
         self._whatsapp_call_guard[key] = now
         return True
 
-    def _speak_local_fast(self, text: str) -> None:
-        """Speak a short acknowledgement without sending anything to Gemini."""
+    def _speak_gemini_fast(self, text: str) -> None:
+        """Speak a short acknowledgement with Gemini's configured JARVIS voice.
+        
+        This is deliberately separate from Gemini Live. It uses Gemini TTS
+        generation for the same selected voice, so the WhatsApp call does not
+        wait for a conversational Live turn just to speak one sentence.
+        """
         if emergency_stop.is_active() or self.ui.muted:
             return
 
         def _worker():
             try:
-                # Keep only one local acknowledgement at a time.
-                with self._local_tts_lock:
-                    if self._local_tts_speaking:
-                        return
-                    self._local_tts_speaking = True
-                    try:
-                        if self._local_tts is None:
-                            from core.tts import create_tts_player
+                from google import genai as _genai
 
-                            cfg = {}
-                            try:
-                                with open(API_CONFIG_PATH, encoding="utf-8") as _f:
-                                    _cfg = json.load(_f)
-                                    if isinstance(_cfg, dict):
-                                        for _key in (
-                                            "tts_engine",
-                                            "tts_voice",
-                                            "tts_speed",
-                                            "elevenlabs_api_key",
-                                        ):
-                                            if _key in _cfg:
-                                                cfg[_key] = _cfg[_key]
-                            except Exception:
-                                pass
+                _api_key = _get_api_key()
+                _voice = get_voice()
+                _output_name = get_output_device()
+                _output_dev = audio_devices.resolve(_output_name, "output")
 
-                            # Route local speech through the same speaker JARVIS
-                            # is configured to use. The old standalone TTS path
-                            # used sounddevice's system default instead.
-                            try:
-                                cfg["output_device"] = get_output_device()
-                            except Exception:
-                                cfg["output_device"] = None
+                self.ui.write_log(
+                    "SYS: Gemini TTS: "
+                    f"model=gemini-3.8-flash-tts, voice={_voice}, "
+                    f"speaker={_output_name or 'system default'}."
+                )
 
-                            self.ui.write_log(
-                                "SYS: Local TTS: "
-                                f"engine={cfg.get('tts_engine', 'edgetts')}, "
-                                f"speaker={cfg.get('output_device') or 'system default'}."
-                            )
+                _client = _genai.Client(api_key=_api_key)
+                _response = _client.models.generate_content(
+                    model="gemini-3.8-flash-tts",
+                    contents=[{
+                        "role": "user",
+                        "parts": [{
+                            "text": str(text),
+                            "speech_metadata": {
+                                "style": "natural, concise, confident JARVIS acknowledgement"
+                            },
+                        }],
+                    }],
+                    config={
+                        "response_modalities": ["AUDIO"],
+                        "speech_config": {
+                            "voice_config": {
+                                "voice": _voice,
+                            }
+                        },
+                    },
+                )
 
-                            # The fast local acknowledgement bypasses the normal
-                            # startup dependency path, so make the TTS engine
-                            # self-healing here. The project installer already knows
-                            # exactly which packages EdgeTTS needs, including
-                            # miniaudio for MP3 decoding.
-                            try:
-                                import importlib.util as _importlib_util
-                                _missing_tts = []
-                                if _importlib_util.find_spec("edge_tts") is None:
-                                    _missing_tts.append("edge-tts")
-                                if _importlib_util.find_spec("miniaudio") is None:
-                                    _missing_tts.append("miniaudio")
-                                if _missing_tts:
-                                    self.ui.write_log(
-                                        "SYS: Installing missing local TTS dependency: "
-                                        + ", ".join(_missing_tts)
-                                    )
-                                    from core.installer import install_for_config
-                                    install_for_config(cfg, log=self.ui.write_log)
-                            except Exception as _install_exc:
-                                self.ui.write_log(
-                                    f"ERR: Local TTS dependency repair failed — {_install_exc}"
-                                )
+                _audio = None
+                _mime = ""
+                try:
+                    for _candidate in (_response.candidates or []):
+                        _content = getattr(_candidate, "content", None)
+                        for _part in (getattr(_content, "parts", None) or []):
+                            _blob = getattr(_part, "inline_data", None)
+                            if _blob is not None and getattr(_blob, "data", None):
+                                _audio = _blob.data
+                                _mime = str(getattr(_blob, "mime_type", "") or "")
+                                break
+                        if _audio:
+                            break
+                except Exception:
+                    pass
 
-                            self._local_tts = create_tts_player(cfg)
+                if not _audio:
+                    raise RuntimeError("Gemini TTS returned no audio data.")
 
-                        self.ui.write_log("SYS: Local TTS speaking fast WhatsApp acknowledgement.")
-                        self._local_tts.speak(str(text))
-                    finally:
-                        self._local_tts_speaking = False
+                import miniaudio as _miniaudio
+                import numpy as _np
+                import sounddevice as _sd
+
+                _decoded = _miniaudio.decode(
+                    _audio,
+                    output_format=_miniaudio.SampleFormat.FLOAT32,
+                    nchannels=1,
+                )
+                _samples = _np.asarray(_decoded.samples, dtype=_np.float32)
+                _rate = int(_decoded.sample_rate or 24000)
+
+                try:
+                    _sd.play(_samples, _rate, device=_output_dev)
+                    _sd.wait()
+                except Exception as _device_exc:
+                    if _output_dev is None:
+                        raise
+                    self.ui.write_log(
+                        f"SYS: Gemini TTS speaker rejected audio — {_device_exc}; "
+                        "retrying system default."
+                    )
+                    _sd.stop()
+                    _sd.play(_samples, _rate)
+                    _sd.wait()
+
+                self.ui.write_log(
+                    f"SYS: Gemini TTS acknowledgement spoken successfully "
+                    f"({len(_audio):,} bytes, {_mime or 'audio'})."
+                )
             except Exception as exc:
-                self.ui.write_log(f"ERR: Local acknowledgement speech failed — {exc}")
+                self.ui.write_log(f"ERR: Gemini TTS acknowledgement failed — {exc}")
 
         threading.Thread(
             target=_worker,
-            name="jarvis-local-tts",
+            name="jarvis-gemini-fast-tts",
             daemon=True,
         ).start()
 
@@ -2443,7 +2458,7 @@ class JarvisLive:
             # acknowledgement through local TTS, not Gemini Live. This runs in
             # its own thread, so it cannot add latency to the WhatsApp click.
             if str(result).lower().startswith(("voice call started", "video call started")):
-                self._speak_local_fast(
+                self._speak_gemini_fast(
                     f"Sir, the {'video' if video else 'voice'} call with {contact} has been started."
                 )
         except Exception as exc:
