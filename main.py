@@ -2261,11 +2261,11 @@ class JarvisLive:
                 looks_like_file = bool(
                     _re.search(r"(?:[A-Za-z]:[\\/]|[\\/])", app_name)
                     or _re.search(
-                        r"\\.(?:exe|lnk|json|txt|pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|zip|rar|7z|py|js|ts|html|css)$",
+                        r"\.(?:exe|lnk|json|txt|pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|zip|rar|7z|py|js|ts|html|css)$",
                         app_name,
                         flags=_re.IGNORECASE,
                     )
-                    or bool(_re.search(r"\\b(?:file|document|folder|directory|project file)\\b", app_name, flags=_re.IGNORECASE))
+                    or bool(_re.search(r"\b(?:file|document|folder|directory|project file)\b", app_name, flags=_re.IGNORECASE))
                 )
                 if looks_like_file:
                     try:
