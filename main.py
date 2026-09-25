@@ -2445,7 +2445,8 @@ class JarvisLive:
                 f"{_audio_bytes} bytes in {_audio_chunks} audio chunks "
                 "using the normal JARVIS audio pipeline "
                 f"(turn complete: {_turn_complete})."
-            )        except Exception as exc:
+            )
+        except Exception as exc:
             self.ui.write_log(f"ERR: Fast JARVIS acknowledgement failed — {exc}")
 
     async def _start_fast_whatsapp_call(
