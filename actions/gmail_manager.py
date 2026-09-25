@@ -34,6 +34,124 @@ SCOPES = [
 _lock = threading.RLock()
 _service = None
 
+_auth_thread = None
+_auth_state = {
+    "status": "idle",
+    "started_at": 0.0,
+    "finished_at": 0.0,
+    "error": "",
+}
+REQUIRED_SCOPES = set(SCOPES)
+
+
+class GmailAuthorizationRequired(RuntimeError):
+    """Raised when Gmail needs user OAuth without blocking a normal command."""
+
+
+def _token_has_required_scopes():
+    if not TOKEN.exists():
+        return False
+    try:
+        from google.oauth2.credentials import Credentials
+        creds = Credentials.from_authorized_user_file(str(TOKEN), SCOPES)
+        granted = set(creds.scopes or [])
+        return bool(creds) and REQUIRED_SCOPES.issubset(granted)
+    except Exception:
+        return False
+
+
+def _auth_worker():
+    global _service, _auth_state
+    try:
+        from google_auth_oauthlib.flow import InstalledAppFlow
+        from googleapiclient.discovery import build
+
+        if not CREDENTIALS.exists():
+            raise RuntimeError(f"Google desktop OAuth credentials not found: {CREDENTIALS}")
+
+        flow = InstalledAppFlow.from_client_secrets_file(
+            str(CREDENTIALS),
+            SCOPES,
+        )
+
+        with _lock:
+            started = datetime.now().timestamp()
+            _auth_state = {
+                "status": "waiting_for_browser",
+                "started_at": started,
+                "finished_at": 0.0,
+                "error": "",
+            }
+
+        creds = flow.run_local_server(
+            port=0,
+            open_browser=True,
+            timeout=600,
+            prompt="consent",
+        )
+
+        TOKEN.parent.mkdir(parents=True, exist_ok=True)
+        TOKEN.write_text(creds.to_json(), encoding="utf-8")
+
+        with _lock:
+            _service = build("gmail", "v1", credentials=creds, cache_discovery=False)
+            _auth_state = {
+                "status": "authorized",
+                "started_at": started,
+                "finished_at": datetime.now().timestamp(),
+                "error": "",
+            }
+    except Exception as exc:
+        with _lock:
+            _auth_state = {
+                "status": "failed",
+                "started_at": _auth_state.get("started_at", 0.0),
+                "finished_at": datetime.now().timestamp(),
+                "error": str(exc),
+            }
+
+
+def _start_authorization():
+    global _auth_thread
+    with _lock:
+        if _auth_thread is not None and _auth_thread.is_alive():
+            return "Gmail authorization is already running. Finish the Google sign-in in your browser."
+
+        if not CREDENTIALS.exists():
+            return f"Google desktop OAuth credentials not found: {CREDENTIALS}"
+
+        _auth_thread = threading.Thread(
+            target=_auth_worker,
+            daemon=True,
+            name="jarvis-gmail-oauth",
+        )
+        _auth_thread.start()
+
+    return (
+        "Gmail authorization started in the background. "
+        "A Google sign-in window should open. Complete the permission screen, "
+        "then say 'Gmail auth status'. JARVIS will not block while waiting."
+    )
+
+
+def _auth_status() -> str:
+    with _lock:
+        state = dict(_auth_state)
+        alive = bool(_auth_thread and _auth_thread.is_alive())
+
+    if _token_has_required_scopes() and state.get("status") == "authorized":
+        return "Gmail is authorized and ready."
+
+    if alive and state.get("status") == "waiting_for_browser":
+        return "Gmail authorization is waiting for you to finish Google sign-in in the browser."
+
+    if state.get("status") == "failed":
+        return f"Gmail authorization failed: {state.get('error') or 'unknown error'}"
+
+    return "Gmail is not authorized yet. Say 'authorize Gmail' to start Google authorization."
+
+
+
 
 def _service_obj():
     global _service
@@ -41,45 +159,39 @@ def _service_obj():
         if _service is not None:
             return _service
 
-        from google.oauth2.credentials import Credentials
-        from google_auth_oauthlib.flow import InstalledAppFlow
-        from google.auth.transport.requests import Request
-        from googleapiclient.discovery import build
+    if not TOKEN.exists() or not _token_has_required_scopes():
+        raise GmailAuthorizationRequired(
+            "Gmail authorization is required. Say 'authorize Gmail' first."
+        )
 
-        creds = None
-        if TOKEN.exists():
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
+    from googleapiclient.discovery import build
+
+    try:
+        creds = Credentials.from_authorized_user_file(str(TOKEN), SCOPES)
+    except Exception as exc:
+        raise GmailAuthorizationRequired(
+            f"Gmail token could not be loaded: {exc}. Say 'authorize Gmail'."
+        ) from exc
+
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
             try:
-                creds = Credentials.from_authorized_user_file(str(TOKEN), SCOPES)
-                existing = set(creds.scopes or [])
-                if not set(SCOPES).issubset(existing):
-                    # Existing tokens from the old readonly integration cannot
-                    # perform send/modify operations. Re-authorize instead of
-                    # failing later with an opaque 403.
-                    creds = None
-            except Exception:
-                creds = None
+                creds.refresh(Request())
+                TOKEN.write_text(creds.to_json(), encoding="utf-8")
+            except Exception as exc:
+                raise GmailAuthorizationRequired(
+                    f"Gmail authorization expired: {exc}. Say 'authorize Gmail'."
+                ) from exc
+        else:
+            raise GmailAuthorizationRequired(
+                "Gmail authorization expired. Say 'authorize Gmail' to reauthorize."
+            )
 
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                try:
-                    creds.refresh(Request())
-                except Exception:
-                    creds = None
-
-            if not creds or not creds.valid:
-                if not CREDENTIALS.exists():
-                    raise RuntimeError(
-                        f"Google desktop OAuth credentials not found: {CREDENTIALS}"
-                    )
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    str(CREDENTIALS), SCOPES
-                )
-                creds = flow.run_local_server(port=0)
-
-            TOKEN.parent.mkdir(parents=True, exist_ok=True)
-            TOKEN.write_text(creds.to_json(), encoding="utf-8")
-
-        _service = build("gmail", "v1", credentials=creds, cache_discovery=False)
+    with _lock:
+        if _service is None:
+            _service = build("gmail", "v1", credentials=creds, cache_discovery=False)
         return _service
 
 
@@ -453,7 +565,16 @@ def _handler(parameters, player=None, **_):
     p = parameters or {}
     action = str(p.get("action", "latest")).strip().lower()
 
-    svc = _service_obj()
+    if action in {"authorize", "auth", "login"}:
+        return _start_authorization()
+
+    if action in {"auth_status", "status"}:
+        return _auth_status()
+
+    try:
+        svc = _service_obj()
+    except GmailAuthorizationRequired as exc:
+        return str(exc)
 
     if action in {"latest", "unread"}:
         q = "in:inbox"
@@ -615,23 +736,24 @@ def _handler(parameters, player=None, **_):
         )
 
     return (
-        "Gmail action must be latest, unread, search, read, send, reply, forward, "
-        "draft, list_drafts, archive, mark_read, mark_unread, trash, purge, "
-        "label, or schedule."
+        "Gmail action must be authorize, auth_status, latest, unread, search, read, "
+        "send, reply, forward, draft, list_drafts, archive, mark_read, mark_unread, "
+        "trash, purge, label, or schedule."
     )
 
 
 TOOL = {
     "name": "gmail_manager",
     "description": (
-        "Full Gmail agent. Read/search mail, compose drafts, send email, reply, "
-        "forward, list drafts, archive, mark read/unread, label, trash, permanently "
-        "delete, and schedule a send on Windows. External sends/deletions use the HUD confirmation gate."
+        "Full Gmail agent. Authorize Gmail non-blockingly, check auth status, read/search mail, "
+        "compose drafts, send email, reply, forward, list drafts, archive, mark read/unread, "
+        "label, trash, permanently delete, and schedule a send on Windows. External sends/deletions "
+        "use the HUD confirmation gate."
     ),
     "parameters": {
         "type": "OBJECT",
         "properties": {
-            "action": {"type": "STRING", "description": "latest | unread | search | read | send | reply | forward | draft | list_drafts | archive | mark_read | mark_unread | trash | purge | label | schedule"},
+            "action": {"type": "STRING", "description": "authorize | auth_status | latest | unread | search | read | send | reply | forward | draft | list_drafts | archive | mark_read | mark_unread | trash | purge | label | schedule"},
             "limit": {"type": "INTEGER", "description": "Maximum messages/drafts to return"},
             "query": {"type": "STRING", "description": "Gmail search query"},
             "message_id": {"type": "STRING", "description": "Gmail message id"},
