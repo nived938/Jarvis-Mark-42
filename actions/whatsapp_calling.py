@@ -490,11 +490,21 @@ def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
                 if player:
                     player.write_log(f"ERR: Direct WhatsApp launch failed — {exc}")
 
+        if launched_path is None and _launch_windows_app_registration is not None:
+            try:
+                launched_path = _launch_windows_app_registration("WhatsApp")
+            except Exception as exc:
+                if player:
+                    player.write_log(
+                        f"ERR: Windows WhatsApp app registration launch failed — {exc}"
+                    )
+
         if launched_path is None:
-            # Keep the existing launcher only as a last resort for installations
-            # where the executable registry has no usable WhatsApp entry.
-            if _open_messaging_app is None or not _open_messaging_app("WhatsApp"):
-                return "Could not open WhatsApp directly from the app registry."
+            return (
+                "Could not launch WhatsApp directly. "
+                "Add WhatsApp's executable to memory/app_registry.json or verify "
+                "that the Windows WhatsApp app is installed."
+            )
 
         win = _wait_for_whatsapp_window(8.0)
         if win is None:
