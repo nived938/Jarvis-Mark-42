@@ -393,8 +393,9 @@ TOOL_DECLARATIONS = [
         "name": "close_camera",
         "description": (
             "Closes the live camera view shown on screen. "
-            "Call when the user says (in ANY language): close camera, stop camera, "
-            "turn off camera, that's creepy, etc."
+            "Use ONLY when the camera HUD is actually active and the user is referring to the camera. "
+            "Never use this tool for a generic 'close', 'close it', 'close scrcpy', or phone-mirror command; "
+            "the active HUD closer handles those states."
         ),
         "parameters": {"type": "OBJECT", "properties": {}, "required": []}
     },
@@ -1344,6 +1345,15 @@ class JarvisLive:
         # HUD close controls stay local so they work even if Gemini is busy.
         # A generic close phrase only closes the active temporary HUD; it can
         # never shut down JARVIS or close an unrelated Windows application.
+        if self.ui.is_android_cast_hud_open() and low in {
+            "close scrcpy", "stop scrcpy", "close phone", "close my phone",
+            "close phone cast", "stop phone cast", "close android", "hide phone",
+            "hide phone cast",
+        }:
+            self.ui.stop_android_cast()
+            self.ui.write_log("SYS: Android phone HUD closed.")
+            return True
+
         hud_close_phrases = {
             "close", "close it", "close that", "close this",
             "hide", "hide it", "hide that", "hide this",
@@ -2815,8 +2825,19 @@ class JarvisLive:
                 result = "JARVIS is restarting."
 
             elif name == "close_camera":
-                self.ui.stop_camera_stream()
-                result = "Camera closed."
+                command = str(getattr(self, "_current_turn_text", "") or "").casefold().strip()
+                generic_close = command in {
+                    "close", "close it", "close that", "close this",
+                    "hide", "hide it", "hide that", "hide this",
+                    "dismiss", "dismiss it", "dismiss that", "dismiss this",
+                    "exit", "exit it", "exit that", "exit this",
+                    "close hud", "close the hud", "hide hud", "hide the hud",
+                }
+                if hasattr(self.ui, "is_android_cast_hud_open") and self.ui.is_android_cast_hud_open() and generic_close:
+                    result = self.ui.stop_android_cast()
+                else:
+                    self.ui.stop_camera_stream()
+                    result = "Camera closed."
 
             elif name == "close_weather":
                 self.ui.stop_weather_view()
