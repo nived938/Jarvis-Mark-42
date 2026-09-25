@@ -58,3 +58,4 @@ screenshots/
 config/api_keys.json
 config/certs/*.key
 memory/geoapify_map_location.json
+memory/whatsapp_call_button_cache.json
