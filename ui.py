@@ -3511,6 +3511,7 @@ class AndroidCastHudView(QWidget):
         self._foreign_hwnd = 0
         self._foreign_window: QWindow | None = None
         self._foreign_container: QWidget | None = None
+        self._last_embed_error = ""
 
     def set_status(self, text: str, ok: bool = False) -> None:
         self._status.setText(str(text).upper())
@@ -3526,6 +3527,7 @@ class AndroidCastHudView(QWidget):
 
         try:
             self.detach_native_window()
+            self._last_embed_error = ""
 
             hwnd = int(hwnd)
             user32 = ctypes.windll.user32
@@ -3567,6 +3569,7 @@ class AndroidCastHudView(QWidget):
             return True
 
         except Exception as exc:
+            self._last_embed_error = str(exc)
             self.set_status("EMBED FAILED")
             try:
                 self._placeholder.setText(
@@ -3575,6 +3578,9 @@ class AndroidCastHudView(QWidget):
             except Exception:
                 pass
             return False
+
+    def last_embed_error(self) -> str:
+        return str(self._last_embed_error or "Unknown Android cast embedding error.")
 
     def detach_native_window(self) -> None:
         """Remove the Qt wrapper without closing the real scrcpy process."""
@@ -4436,6 +4442,7 @@ class MainWindow(QMainWindow):
         self._android_cast_detach_sig.connect(self._detach_android_cast_on_qt_thread)
         self._android_cast_proc = None
         self._android_cast_hwnd = 0
+        self._android_cast_attached = False
         self._android_cast_starting = False
         self._android_cast_lock = threading.Lock()
         self._android_cast_thread = None
@@ -4838,9 +4845,18 @@ class MainWindow(QMainWindow):
             if self._hud_cam_stack.currentIndex() != 6:
                 self._hud_cam_stack.setCurrentIndex(6)
             attached = self._android_cast_hud.attach_native_window(int(hwnd))
+            with self._android_cast_lock:
+                self._android_cast_attached = bool(attached)
             if not attached:
-                self.write_log("ERR: Android cast window could not be embedded; stopping scrcpy.")
+                detail = self._android_cast_hud.last_embed_error()
+                self.write_log(
+                    f"ERR: Android cast window could not be embedded: {detail}"
+                )
                 self.stop_android_cast()
+            else:
+                self.write_log(
+                    "SYS: Android scrcpy cast embedded in the JARVIS HUD."
+                )
         except Exception as exc:
             self.write_log(f"ERR: Android cast embed failed — {exc}")
             self.stop_android_cast()
@@ -4848,6 +4864,8 @@ class MainWindow(QMainWindow):
     def _detach_android_cast_on_qt_thread(self) -> None:
         try:
             self._android_cast_hud.detach_native_window()
+            with self._android_cast_lock:
+                self._android_cast_attached = False
             if self._hud_cam_stack.currentIndex() == 6:
                 self._hud_cam_stack.setCurrentIndex(0)
         except Exception:
@@ -4957,6 +4975,7 @@ class MainWindow(QMainWindow):
         proc = None
         with self._android_cast_lock:
             self._android_cast_starting = False
+            self._android_cast_attached = False
             proc = self._android_cast_proc
             self._android_cast_proc = None
             self._android_cast_hwnd = 0
@@ -4976,8 +4995,12 @@ class MainWindow(QMainWindow):
         with self._android_cast_lock:
             proc = self._android_cast_proc
             hwnd = self._android_cast_hwnd
-        if proc is not None and proc.poll() is None and hwnd:
+            attached = self._android_cast_attached
+            starting = self._android_cast_starting
+        if attached and proc is not None and proc.poll() is None and hwnd:
             return "Android cast is live inside the JARVIS HUD with direct mouse/keyboard control."
+        if starting or (proc is not None and proc.poll() is None):
+            return "Android cast is starting."
         return "Android cast is not running."
 
     def _apply_privacy_shield(self, active: bool) -> None:
