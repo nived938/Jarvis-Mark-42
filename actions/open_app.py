@@ -1,7 +1,9 @@
+import json
 import time
 import subprocess
 import platform
 import shutil
+from pathlib import Path
 
 try:
     import psutil
@@ -10,6 +12,105 @@ except ImportError:
     _PSUTIL = False
 
 _SYSTEM = platform.system()
+
+_BASE_DIR = Path(__file__).resolve().parent.parent
+_APP_REGISTRY_PATH = _BASE_DIR / "memory" / "app_registry.json"
+
+
+def _load_app_registry() -> list[dict]:
+    """Load the machine-local executable registry created by JARVIS."""
+    try:
+        data = json.loads(_APP_REGISTRY_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception as exc:
+        print(f"[open_app] App registry unavailable: {exc}")
+        return []
+
+
+def _registry_candidates(app_name: str) -> list[Path]:
+    """Return existing executable paths from the registry, best matches first."""
+    query = str(app_name or "").strip().casefold()
+    normalized_query = _normalize(query)
+    rows = _load_app_registry()
+    ranked: list[tuple[int, Path]] = []
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        raw_name = str(row.get("name") or "").strip()
+        raw_normalized = str(row.get("normalized") or "").strip().casefold()
+        raw_path = str(row.get("path") or "").strip()
+        if not raw_path or not raw_path.lower().endswith(".exe"):
+            continue
+
+        path = Path(raw_path)
+        try:
+            if not path.is_file():
+                continue
+        except OSError:
+            continue
+
+        name_key = raw_name.casefold()
+        score = 0
+        if name_key == query:
+            score += 100
+        if raw_normalized == query:
+            score += 90
+        if raw_normalized == str(normalized_query).casefold():
+            score += 80
+        if name_key == str(normalized_query).casefold():
+            score += 75
+
+        # Allow natural phrases such as "open VS Code" to match a registry
+        # entry named "code", while keeping exact matches ahead of fuzzy ones.
+        if query and (query in name_key or name_key in query):
+            score += 35
+        if normalized_query and (
+            normalized_query.casefold() in name_key
+            or name_key in normalized_query.casefold()
+        ):
+            score += 25
+
+        if score <= 0:
+            continue
+
+        # Prefer a real application executable over helper/server binaries when
+        # multiple entries share the same executable name.
+        lower_path = raw_path.casefold()
+        if any(token in lower_path for token in (r"\\bin\\", r"\\tools\\", r"\\node_modules\\", r"\\server\")):
+            score -= 8
+        if "uninstall" in lower_path or "crash" in lower_path or "updater" in lower_path:
+            score -= 40
+
+        ranked.append((score, path))
+
+    ranked.sort(key=lambda item: (-item[0], str(item[1]).casefold()))
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for _, path in ranked:
+        key = str(path).casefold()
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return unique
+
+
+def _launch_registered_app(app_name: str) -> Path | None:
+    """Launch the registered executable directly, without Windows Search."""
+    for exe in _registry_candidates(app_name):
+        try:
+            subprocess.Popen(
+                [str(exe)],
+                cwd=str(exe.parent),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=(subprocess.CREATE_NO_WINDOW if _SYSTEM == "Windows" else 0),
+            )
+            time.sleep(1.0)
+            return exe
+        except Exception as exc:
+            print(f"[open_app] Direct launch failed for '{exe}': {exc}")
+    return None
 
 _APP_ALIASES: dict[str, dict[str, str]] = {
 
@@ -78,40 +179,24 @@ def _normalize(raw: str) -> str:
     return raw  
 
 def _launch_windows(app_name: str) -> bool:
+    """Launch Windows apps directly from the registry or a known command."""
 
-    if shutil.which(app_name) or shutil.which(app_name.split(".")[0]):
+    # Registry lookup is handled by open_app() before this platform fallback.
+    # A small command-path fallback preserves support for system aliases such as
+    # cmd.exe, powershell.exe, wt, explorer.exe, etc. It never opens Windows Search.
+    candidate = _normalize(app_name)
+    command = shutil.which(candidate) or shutil.which(candidate.split(".")[0])
+    if command:
         try:
             subprocess.Popen(
-                app_name,
-                shell=True,
+                [command],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            time.sleep(1.5)
-            return True
-        except Exception as e:
-            print(f"[open_app] subprocess failed: {e}")
-
-    if ":" in app_name:
-        try:
-            subprocess.Popen(f"start {app_name}", shell=True)
             time.sleep(1.0)
             return True
-        except Exception:
-            pass
-
-    try:
-        import pyautogui
-        pyautogui.PAUSE = 0.1
-        pyautogui.press("win")
-        time.sleep(0.7)
-        pyautogui.write(app_name, interval=0.05)
-        time.sleep(0.9)
-        pyautogui.press("enter")
-        time.sleep(2.5)
-        return True
-    except Exception as e:
-        print(f"[open_app] Start Menu search failed: {e}")
+        except Exception as exc:
+            print(f"[open_app] Command fallback failed: {exc}")
 
     return False
 
@@ -259,14 +344,25 @@ def open_app(
         player.write_log(f"[open_app] {app_name}")
 
     try:
+        # On Windows the registry is the primary launch path, so no Start Menu
+        # search or typing into Windows Search is used.
+        if _SYSTEM == "Windows":
+            registered = _launch_registered_app(app_name)
+            if registered is not None:
+                message = f"Opened {app_name} directly: {registered}"
+                print(f"[open_app] {message}")
+                if player:
+                    player.write_log(f"[open_app] {message}")
+                return f"Opened {app_name}."
+
         if launcher(normalized):
             return f"Opened {app_name}."
         if normalized.lower() != app_name.lower():
             if launcher(app_name):
                 return f"Opened {app_name}."
         return (
-            f"Could not confirm that {app_name} launched. "
-            f"It may still be loading, or it might not be installed."
+            f"Could not find a registered executable for {app_name}, "
+            f"and the direct launcher could not start it."
         )
     except Exception as e:
         print(f"[open_app] Error: {e}")
@@ -276,7 +372,7 @@ def open_app(
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
 TOOL = {
     "name": "open_app",
-    "description": "Opens any application on the computer. Use this whenever the user asks to open, launch, or start any app, website, or program. Always call this tool — never just say you opened it.",
+    "description": "Opens applications directly from JARVIS's machine-local memory/app_registry.json on Windows, using the registered executable path instead of Windows Search. Use this whenever the user asks to open, launch, or start an app. If the registry has no usable path, use the built-in direct launcher fallback; never type into Windows Search.",
     "parameters": {
         "type": "OBJECT",
         "properties": {
