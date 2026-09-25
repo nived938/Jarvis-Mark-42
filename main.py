@@ -1356,9 +1356,11 @@ class JarvisLive:
             r"(?:whatsapp )?video call (.+)", raw, flags=_re.IGNORECASE
         )
         if video_call:
+            contact = video_call.group(1).strip()
+            self.speak(f"Sir, calling {contact} on WhatsApp now.")
             result = self._run_local_action(
                 "whatsapp_calling",
-                {"action": "video_call", "contact": video_call.group(1).strip()},
+                {"action": "video_call", "contact": contact},
             )
             self.speak("Sir, " + str(result))
             return True
@@ -1369,9 +1371,11 @@ class JarvisLive:
         if voice_call and voice_call.group(1).strip() not in {
             "jarvis", "me", "a cab", "an uber", "a taxi", "someone"
         }:
+            contact = voice_call.group(1).strip()
+            self.speak(f"Sir, calling {contact} on WhatsApp now.")
             result = self._run_local_action(
                 "whatsapp_calling",
-                {"action": "call", "contact": voice_call.group(1).strip()},
+                {"action": "call", "contact": contact},
             )
             self.speak("Sir, " + str(result))
             return True
