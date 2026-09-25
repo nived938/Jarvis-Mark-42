@@ -4886,9 +4886,13 @@ class MainWindow(QMainWindow):
         try:
             if self._hud_cam_stack.currentIndex() != 6:
                 self._hud_cam_stack.setCurrentIndex(6)
-            self._android_cast_hud.attach_native_window(int(hwnd))
+            attached = self._android_cast_hud.attach_native_window(int(hwnd))
+            if not attached:
+                self.write_log("ERR: Android cast window could not be embedded; stopping scrcpy.")
+                self.stop_android_cast()
         except Exception as exc:
             self.write_log(f"ERR: Android cast embed failed — {exc}")
+            self.stop_android_cast()
 
     def _detach_android_cast_on_qt_thread(self) -> None:
         try:
