@@ -2384,6 +2384,12 @@ class JarvisLive:
 
         self._whatsapp_fast_call_active = True
         self._whatsapp_fast_call_started = time.monotonic()
+        # Silently stop any model audio belonging to this same command. This
+        # replaces the old user-visible interrupt() call, which made JARVIS
+        # announce "Interrupted — listening..." even though the call was already
+        # being handled locally.
+        self._interrupted = True
+        self._visemes.reset()
         self.ui.write_log(
             f"SYS: Fast WhatsApp {'video' if video_match else 'voice'} call starting for {contact}."
         )
@@ -2407,6 +2413,9 @@ class JarvisLive:
             # The Live session is not running, so close the coroutine instead of
             # producing "coroutine was never awaited" during shutdown/startup.
             _coro.close()
+            self._whatsapp_fast_call_active = False
+            self._whatsapp_fast_call_started = 0.0
+            self._interrupted = False
             self.ui.write_log(
                 "ERR: Fast WhatsApp call could not be scheduled because "
                 "the JARVIS Live loop is not running."
