@@ -3402,21 +3402,26 @@ class JarvisLive:
                         sc = response.server_content
 
                         if sc.output_transcription and sc.output_transcription.text:
-                            txt = _clean_transcript(sc.output_transcription.text)
-                            # A turn that involves a tool call passes through
-                            # several turn_completes, and the API re-sends the
-                            # tail of the transcript across them. Comparing only
-                            # against the previous chunk missed that — once
-                            # out_buf had been flushed and emptied, the repeat
-                            # sailed straight back in, which logged the answer
-                            # twice AND made the avatar mouth it twice.
-                            if txt and not _is_repeat_chunk(txt, out_buf):
-                                out_buf.append(txt)
-                                # Hand the words to the mouth as they arrive, so
-                                # the avatar can form the consonants the audio
-                                # alone cannot show. Pure string work — it adds
-                                # nothing measurable to the response path.
-                                self._visemes.feed_text(txt)
+                            # A locally-handled WhatsApp call must never produce
+                            # a delayed Gemini acknowledgement. The audio itself
+                            # is already discarded while _interrupted is set, so
+                            # discard its output transcript for the same turn.
+                            if not self._interrupted:
+                                txt = _clean_transcript(sc.output_transcription.text)
+                                # A turn that involves a tool call passes through
+                                # several turn_completes, and the API re-sends the
+                                # tail of the transcript across them. Comparing only
+                                # against the previous chunk missed that — once
+                                # out_buf had been flushed and emptied, the repeat
+                                # sailed straight back in, which logged the answer
+                                # twice AND made the avatar mouth it twice.
+                                if txt and not _is_repeat_chunk(txt, out_buf):
+                                    out_buf.append(txt)
+                                    # Hand the words to the mouth as they arrive, so
+                                    # the avatar can form the consonants the audio
+                                    # alone cannot show. Pure string work — it adds
+                                    # nothing measurable to the response path.
+                                    self._visemes.feed_text(txt)
 
                         if sc.input_transcription and sc.input_transcription.text:
                             txt = _clean_transcript(sc.input_transcription.text)
