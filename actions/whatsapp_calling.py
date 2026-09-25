@@ -745,7 +745,6 @@ def _monitor_loop() -> None:
             continue
 
         try:
-            win, caller, call_type = _incoming_window()
             current = _pending_snapshot()
 
             if _OUTGOING_CALL_ACTIVE.is_set():
@@ -753,16 +752,19 @@ def _monitor_loop() -> None:
                 # should never contend with a full UIA tree walk from this watcher.
                 continue
 
+            # Scan all visible WhatsApp windows for a connected call. The active
+            # call may live in a separate floating window, so it cannot depend on
+            # _incoming_window() returning a banner window.
+            windows = _whatsapp_windows()
+            connected = any(_connected_call_state(candidate) for candidate in windows)
+            _set_call_active(connected)
+
+            win, caller, call_type = _incoming_window()
+
             if win is None:
                 if current is not None:
                     _set_pending(None)
                 continue
-
-            # Once the incoming banner disappears, watch for the connected-call
-            # controls. This is also what clears the call-audio isolation when the
-            # remote party hangs up.
-            connected = _connected_call_state(win)
-            _set_call_active(connected)
 
             signature = f"{_norm(caller)}|{call_type}"
             now = time.monotonic()
