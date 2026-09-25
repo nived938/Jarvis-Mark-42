@@ -192,6 +192,7 @@ The Android Companion uses ADB as the full control plane: device discovery, wire
 ### Monitoring and reliability
 
 - screen-change sentinel
+- continuous semantic screen watch for meaningful desktop problems
 - local audio-event classification
 - gesture recognition
 - no-progress tool guard
