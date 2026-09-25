@@ -401,9 +401,13 @@ def _schedule_windows(payload: dict) -> str:
     dt = datetime.fromisoformat(str(payload["scheduled_at"]))
     task_name = f"JARVIS_Gmail_{sid}"
 
+    project_root = str(BASE_DIR).replace("\\", "/")
+    payload_path = str(path).replace("\\", "/")
     script = (
-        "from actions.gmail_manager import run_scheduled;"
-        f"run_scheduled(r'{str(path)}')"
+        "import sys; "
+        f"sys.path.insert(0, r'{project_root}'); "
+        "from actions.gmail_manager import run_scheduled; "
+        f"run_scheduled(r'{payload_path}')"
     )
     python_exe = Path(sys.executable)
     command = [
