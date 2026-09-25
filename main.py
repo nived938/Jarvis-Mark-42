@@ -936,6 +936,11 @@ class JarvisLive:
         # no second Gemini speech round-trip is allowed for the same request.
         self._whatsapp_fast_call_active = False
         self._whatsapp_fast_call_started = 0.0
+        # Local TTS for instant acknowledgements that must not make a Gemini
+        # round trip. Initialized lazily on the first fast local speech request.
+        self._local_tts = None
+        self._local_tts_lock = threading.Lock()
+        self._local_tts_speaking = False
         self._trace_id = trace_start_session()
 
         self._client_turn_started = 0.0
@@ -2331,6 +2336,52 @@ class JarvisLive:
         self._whatsapp_call_guard[key] = now
         return True
 
+    def _speak_local_fast(self, text: str) -> None:
+        """Speak a short acknowledgement without sending anything to Gemini."""
+        if emergency_stop.is_active() or self.ui.muted:
+            return
+
+        def _worker():
+            try:
+                # Keep only one local acknowledgement at a time.
+                with self._local_tts_lock:
+                    if self._local_tts_speaking:
+                        return
+                    self._local_tts_speaking = True
+                    try:
+                        if self._local_tts is None:
+                            from core.tts import create_tts_player
+
+                            cfg = {}
+                            try:
+                                with open(API_CONFIG_PATH, encoding="utf-8") as _f:
+                                    _cfg = json.load(_f)
+                                    if isinstance(_cfg, dict):
+                                        for _key in (
+                                            "tts_engine",
+                                            "tts_voice",
+                                            "tts_speed",
+                                            "elevenlabs_api_key",
+                                        ):
+                                            if _key in _cfg:
+                                                cfg[_key] = _cfg[_key]
+                            except Exception:
+                                pass
+
+                            self._local_tts = create_tts_player(cfg)
+
+                        self._local_tts.speak(str(text))
+                    finally:
+                        self._local_tts_speaking = False
+            except Exception as exc:
+                self.ui.write_log(f"ERR: Local acknowledgement speech failed — {exc}")
+
+        threading.Thread(
+            target=_worker,
+            name="jarvis-local-tts",
+            daemon=True,
+        ).start()
+
     async def _start_fast_whatsapp_call(self, contact: str, video: bool = False) -> None:
         action = "video_call" if video else "call"
         self._whatsapp_fast_call_active = True
@@ -2348,6 +2399,14 @@ class JarvisLive:
             self.ui.write_log(
                 f"JARVIS: {result} (local WhatsApp path {elapsed:.2f}s)"
             )
+
+            # The call is already complete. Give the user a short spoken
+            # acknowledgement through local TTS, not Gemini Live. This runs in
+            # its own thread, so it cannot add latency to the WhatsApp click.
+            if str(result).lower().startswith(("voice call started", "video call started")):
+                self._speak_local_fast(
+                    f"Sir, the {'video' if video else 'voice'} call with {contact} has been started."
+                )
         except Exception as exc:
             self.ui.write_log(f"ERR: Fast WhatsApp call failed — {exc}")
         finally:
