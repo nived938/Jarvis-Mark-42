@@ -2333,17 +2333,21 @@ class JarvisLive:
 
     async def _speak_fast_ack_live(self, text: str) -> None:
         """Speak a short local acknowledgement with the normal JARVIS Live voice.
-        
-        Uses a tiny separate Gemini Live session so the acknowledgement does not
-        become a new turn in the user's main conversation. Generated audio is fed
-        into JARVIS's existing playback queue, so the voice, speaker, waveform,
-        echo guard, and output pipeline remain exactly the same as normal JARVIS
-        speech.
+
+        The acknowledgement gets its own tiny Gemini Live session so it never
+        becomes a turn in the user's main conversation. The generated 24 kHz
+        PCM is then placed into JARVIS's existing playback queue, which keeps
+        the same speaker, waveform, mouth animation, echo guard, and Charon
+        voice used by ordinary JARVIS speech.
         """
         if emergency_stop.is_active() or self.ui.muted:
             return
-        if self.audio_in_queue is None:
-            self.ui.write_log("ERR: Fast acknowledgement skipped: audio output is unavailable.")
+
+        _audio_queue = self.audio_in_queue
+        if _audio_queue is None:
+            self.ui.write_log(
+                "ERR: Fast acknowledgement skipped: audio output is unavailable."
+            )
             return
 
         try:
@@ -2361,8 +2365,12 @@ class JarvisLive:
             )
 
             self.ui.write_log(
-                f"SYS: Fast acknowledgement using JARVIS Live voice { _voice }."
+                f"SYS: Fast acknowledgement using JARVIS Live voice {_voice}."
             )
+
+            _audio_bytes = 0
+            _audio_chunks = 0
+            _turn_complete = False
 
             async with _client.aio.live.connect(
                 model=LIVE_MODEL,
@@ -2375,24 +2383,61 @@ class JarvisLive:
                             "text": (
                                 "Speak exactly this sentence and nothing else: "
                                 + str(text)
-                            )
+                            ),
                         }],
                     },
                     turn_complete=True,
                 )
 
                 async for _response in _session.receive():
-                    if _response.data:
-                        try:
-                            self.audio_in_queue.put_nowait(_response.data)
-                        except asyncio.QueueFull:
-                            pass
+                    _chunks = []
 
-                    if _response.server_content:
-                        if getattr(_response.server_content, "turn_complete", False):
-                            break
+                    # Gemini Live currently exposes native audio in
+                    # server_content.model_turn.parts[].inline_data. Use
+                    # response.data only as a compatibility fallback for SDK
+                    # versions that surface the same PCM there.
+                    _sc = getattr(_response, "server_content", None)
+                    _model_turn = getattr(_sc, "model_turn", None) if _sc else None
+                    _parts = getattr(_model_turn, "parts", None) if _model_turn else None
 
-            self.ui.write_log("SYS: Fast acknowledgement spoken with the normal JARVIS audio pipeline.")
+                    if _parts:
+                        for _part in _parts:
+                            _inline = getattr(_part, "inline_data", None)
+                            _data = getattr(_inline, "data", None) if _inline else None
+                            if _data:
+                                _chunks.append(_data)
+                    elif getattr(_response, "data", None):
+                        _chunks.append(_response.data)
+
+                    for _data in _chunks:
+                        if not _data:
+                            continue
+
+                        _audio_bytes += len(_data)
+                        _audio_chunks += 1
+
+                        # Match the main playback loop's chunk size. Awaiting
+                        # the queue instead of silently dropping on QueueFull
+                        # guarantees the acknowledgement reaches the speaker.
+                        for _i in range(0, len(_data), 2400):
+                            await _audio_queue.put(_data[_i : _i + 2400])
+
+                    if _sc and getattr(_sc, "turn_complete", False):
+                        _turn_complete = True
+                        break
+
+            if _audio_bytes <= 0:
+                self.ui.write_log(
+                    "ERR: Fast JARVIS acknowledgement produced no audio bytes."
+                )
+                return
+
+            self.ui.write_log(
+                "SYS: Fast acknowledgement queued "
+                f"{_audio_bytes} bytes in {_audio_chunks} audio chunks "
+                "using the normal JARVIS audio pipeline "
+                f"(turn complete: {_turn_complete})."
+            )
         except Exception as exc:
             self.ui.write_log(f"ERR: Fast JARVIS acknowledgement failed — {exc}")
 
