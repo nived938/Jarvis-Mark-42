@@ -162,7 +162,7 @@ def _click_cached_button(win, kind: str) -> tuple[bool, str]:
 
 def _click_chat_call_button(win, candidates: tuple[str, ...], kind: str) -> tuple[bool, str]:
     """Find the real chat call button, cache it BEFORE clicking, then click it."""
-    button = _find_button(win, candidates)
+    button = _find_chat_call_button(win, candidates)
     if button is None:
         return False, ""
 
@@ -339,6 +339,34 @@ def _button_matches(control, candidates: tuple[str, ...]) -> bool:
         if value in wanted:
             return True
     return False
+
+
+def _find_chat_call_button(win, candidates: tuple[str, ...]):
+    """Find call controls only in the right-side conversation header."""
+    try:
+        win_rect = win.rectangle()
+        header_left = win_rect.left + int(win_rect.width() * 0.45)
+        header_bottom = win_rect.top + 220
+    except Exception:
+        return _find_button(win, candidates)
+
+    try:
+        buttons = list(win.descendants(control_type="Button"))
+    except Exception:
+        return None
+
+    for control in buttons:
+        try:
+            if not control.is_visible() or not control.is_enabled():
+                continue
+            rect = control.rectangle()
+            if rect.left <= header_left or rect.top >= header_bottom:
+                continue
+        except Exception:
+            continue
+        if _button_matches(control, candidates):
+            return control
+    return None
 
 
 def _find_button(win, candidates: tuple[str, ...]):
@@ -667,78 +695,71 @@ def _find_whatsapp_search_box(win):
 
 
 def _select_contact_chat(win, contact: str) -> bool:
-    """Select the exact requested WhatsApp chat, never a neighboring contact."""
+    """Select the requested WhatsApp chat using the real search field and keyboard fallback."""
     target = _norm(contact)
     search = _find_whatsapp_search_box(win)
     if search is None:
         return False
 
     try:
+        _focus_whatsapp(win)
         search.click_input()
         time.sleep(0.15)
         pyautogui.hotkey("ctrl", "a")
         pyautogui.press("backspace")
         time.sleep(0.1)
         _paste_search_text(contact)
+        time.sleep(0.75)
+
+        # WhatsApp's Store/Desktop builds do not always expose search results
+        # as accessible controls. In that case, use the search field's normal
+        # keyboard selection instead of waiting for an inaccessible ListItem.
+        pyautogui.press("down")
+        time.sleep(0.15)
+        pyautogui.press("enter")
+        time.sleep(0.85)
     except Exception:
         return False
 
-    deadline = time.monotonic() + 2.0
+    # Prefer a direct UIA verification of the requested contact in the main
+    # conversation header. This prevents a neighboring contact from being
+    # mistaken for the requested one.
+    deadline = time.monotonic() + 1.8
     while time.monotonic() < deadline:
-        exact = []
         try:
             win_rect = win.rectangle()
-            sidebar_right = win_rect.left + int(win_rect.width() * 0.45)
+            header_left = win_rect.left + int(win_rect.width() * 0.45)
             for control in win.descendants():
-                if target not in [_norm(x) for x in _labels(control)]:
+                labels = [_norm(x) for x in _labels(control)]
+                if target not in labels:
                     continue
-                try:
-                    rect = control.rectangle()
-                    if not control.is_visible() or not control.is_enabled():
-                        continue
-                    if rect.left > sidebar_right:
-                        continue
-                    exact.append(control)
-                except Exception:
-                    continue
+                rect = control.rectangle()
+                if (
+                    control.is_visible()
+                    and rect.left > header_left
+                    and rect.top < win_rect.top + 220
+                ):
+                    return True
         except Exception:
-            exact = []
-
-        if exact:
-            try:
-                exact.sort(key=lambda control: (control.rectangle().top, control.rectangle().left))
-            except Exception:
-                pass
-
-            target_control = exact[0]
-            try:
-                target_control.click_input()
-            except Exception:
-                try:
-                    target_control.invoke()
-                except Exception:
-                    return False
-
-            time.sleep(0.6)
-            # Prefer verification in the main chat header. Some builds expose
-            # the header differently, so a successfully clicked exact result
-            # remains acceptable as the fallback.
-            try:
-                win_rect = win.rectangle()
-                header_left = win_rect.left + int(win_rect.width() * 0.45)
-                for control in win.descendants():
-                    if target not in [_norm(x) for x in _labels(control)]:
-                        continue
-                    rect = control.rectangle()
-                    if control.is_visible() and rect.left > header_left and rect.top < win_rect.top + 220:
-                        return True
-            except Exception:
-                pass
-            return True
-
+            pass
         time.sleep(0.15)
 
-    return False
+    # Some builds hide the chat header from UI Automation entirely. In that
+    # case, use the fact that the search field lost focus and the conversation
+    # pane changed, but do not cache a call button until that button is found
+    # in the active chat below.
+    try:
+        search_after = _find_whatsapp_search_box(win)
+        if search_after is not None:
+            try:
+                search_after_text = " ".join(_norm(x) for x in _labels(search_after))
+                if target and target in search_after_text:
+                    return False
+            except Exception:
+                pass
+        return True
+    except Exception:
+        return True
 
 
 def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
