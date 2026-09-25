@@ -706,7 +706,14 @@ def _select_contact_chat(win, contact: str) -> bool:
         # WhatsApp for Windows documents Ctrl+Alt+N as "New chat". This is
         # safer than Ctrl+F because Ctrl+F is for searching chat content.
         pyautogui.hotkey("ctrl", "alt", "n")
-        time.sleep(0.6)
+        time.sleep(0.7)
+
+        # On some Windows/WhatsApp builds the final "N" from Ctrl+Alt+N can
+        # leak into the newly opened search field. Always clear the field after
+        # the shortcut before inserting the requested contact.
+        pyautogui.hotkey("ctrl", "a")
+        pyautogui.press("backspace")
+        time.sleep(0.1)
 
         # The New Chat dialog has a search field. Typing the exact contact and
         # pressing Enter selects the first matching contact from that dialog.
