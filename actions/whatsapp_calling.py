@@ -624,26 +624,56 @@ def _classify_call_type(texts: list[str]) -> str:
     return "voice"
 
 
-def _connected_call_state(win) -> bool:
-    """Return True only when WhatsApp exposes controls for an already connected call.
+def _has_call_duration_timer(labels: list[str]) -> bool:
+    """Return True when the WhatsApp call window shows a running duration timer.
 
-    'calling' and 'ringing' are deliberately excluded because they only mean the
-    other side has not answered yet.
+    In the WhatsApp Desktop UI, the same microphone/camera/end-call controls can
+    be visible while the call is still ringing. The reliable UIA change after the
+    other side answers is the elapsed-time label, e.g. "00:02".
+    """
+    for label in labels:
+        value = str(label or "").strip()
+        if re.fullmatch(r"\d{1,3}:\d{2}", value):
+            return True
+    return False
+
+
+def _connected_call_state(win) -> bool:
+    """Return True only when WhatsApp shows that the call is actually connected.
+
+    Do not use microphone, camera, speaker, or hang-up buttons as the primary
+    signal: those controls are also present in the pre-answer "Ringing..."
+    window. A running duration timer such as "00:02" is the primary signal.
     """
     labels = [_norm(x) for x in _all_visible_text(win)]
     joined = " ".join(labels)
+
+    # Strong positive signal from the connected call window.
+    if _has_call_duration_timer(labels):
+        return True
+
+    # Accept explicit connected-state text from a WhatsApp build that exposes it.
     connected_markers = (
-        "end call",
-        "hang up",
-        "mute",
-        "unmute",
-        "speaker",
-        "turn off camera",
-        "turn on camera",
-        "video off",
-        "video on",
+        "connected",
+        "call in progress",
+        "in call",
+        "on call",
     )
-    return any(marker in joined for marker in connected_markers)
+    if any(marker in joined for marker in connected_markers):
+        return True
+
+    # Explicitly reject the pre-answer states.
+    ringing_markers = (
+        "ringing",
+        "calling",
+        "connecting",
+        "waiting for",
+    )
+    if any(marker in joined for marker in ringing_markers):
+        return False
+
+    # Without a duration or explicit connected-state text, do not guess.
+    return False
 
 
 def _set_call_active(active: bool) -> None:
@@ -1033,16 +1063,50 @@ def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
         _OUTGOING_CALL_ACTIVE.clear()
         _OUTGOING_CALL_LOCK.release()
 
-def _wait_for_connected_call(timeout: float = 30.0) -> bool:
+def _wait_for_connected_call(timeout: float = 60.0) -> bool:
+    """Wait until a visible WhatsApp call window is genuinely connected.
+
+    The caller may take a while to answer. Never speak merely because the
+    outgoing window is showing "Ringing..." or because microphone/end-call
+    controls exist. Speaking starts only after the connected-state detector sees
+    a call duration timer or explicit connected-state text.
+    """
     deadline = time.monotonic() + max(1.0, float(timeout))
+    last_state = None
+
     while time.monotonic() < deadline:
         windows = _whatsapp_windows()
-        if any(_connected_call_state(win) for win in windows):
+        connected = False
+        for win in windows:
+            try:
+                if _connected_call_state(win):
+                    connected = True
+                    break
+            except Exception:
+                pass
+
+        state = "connected" if connected else "waiting"
+        if state != last_state:
+            last_state = state
+            player = None
+            with _runtime_lock:
+                player = _runtime_player
+            if player:
+                try:
+                    player.write_log(
+                        "SYS: WhatsApp call state: "
+                        + ("CONNECTED — preparing caller speech." if connected
+                           else "WAITING — call has not been answered yet.")
+                    )
+                except Exception:
+                    pass
+
+        if connected:
             _set_call_active(True)
             return True
-        # If WhatsApp's call UI changes faster than UIA exposes its final controls,
-        # the background monitor will also publish the active state.
+
         time.sleep(0.25)
+
     return False
 
 
