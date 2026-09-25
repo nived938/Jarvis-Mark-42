@@ -694,6 +694,40 @@ def _find_whatsapp_search_box(win):
         return matches[0]
 
 
+def _active_chat_matches_contact(win, contact: str) -> bool:
+    """Verify the requested contact is visible in the right-side chat area."""
+    target = _norm(contact)
+    if not target:
+        return False
+
+    try:
+        title = _norm(win.window_text())
+        if target in title:
+            return True
+    except Exception:
+        pass
+
+    try:
+        win_rect = win.rectangle()
+        right_start = win_rect.left + int(win_rect.width() * 0.45)
+        top_limit = win_rect.top + 220
+        for control in win.descendants():
+            labels = [_norm(x) for x in _labels(control)]
+            if not any(target in label for label in labels):
+                continue
+            rect = control.rectangle()
+            if (
+                control.is_visible()
+                and rect.left > right_start
+                and rect.top < top_limit
+            ):
+                return True
+    except Exception:
+        pass
+
+    return False
+
+
 def _select_contact_chat(win, contact: str) -> bool:
     """Select the requested WhatsApp chat using the real search field and keyboard fallback."""
     target = _norm(contact)
@@ -744,22 +778,9 @@ def _select_contact_chat(win, contact: str) -> bool:
             pass
         time.sleep(0.15)
 
-    # Some builds hide the chat header from UI Automation entirely. In that
-    # case, use the fact that the search field lost focus and the conversation
-    # pane changed, but do not cache a call button until that button is found
-    # in the active chat below.
-    try:
-        search_after = _find_whatsapp_search_box(win)
-        if search_after is not None:
-            try:
-                search_after_text = " ".join(_norm(x) for x in _labels(search_after))
-                if target and target in search_after_text:
-                    return False
-            except Exception:
-                pass
-        return True
-    except Exception:
-        return True
+    # Do not guess here. A cached call button is safe to use only after the
+    # requested contact is verifiably visible in the active chat header.
+    return _active_chat_matches_contact(win, contact)
 
 
 def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
