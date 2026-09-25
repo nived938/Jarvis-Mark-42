@@ -86,6 +86,7 @@ _monitor_stop = threading.Event()
 _pending: Optional[PendingCall] = None
 _last_signature = ""
 _last_signature_time = 0.0
+_last_connected_seen = 0.0
 _ANNOUNCE_COOLDOWN = 8.0
 _SCAN_INTERVAL = 0.8
 
@@ -738,7 +739,7 @@ def _announce_incoming(caller: str, call_type: str) -> None:
 
 
 def _monitor_loop() -> None:
-    global _last_signature, _last_signature_time
+    global _last_signature, _last_signature_time, _last_connected_seen
 
     while not _monitor_stop.wait(_SCAN_INTERVAL):
         if os.name != "nt" or not _PYWINAUTO:
@@ -757,7 +758,14 @@ def _monitor_loop() -> None:
             # _incoming_window() returning a banner window.
             windows = _whatsapp_windows()
             connected = any(_connected_call_state(candidate) for candidate in windows)
-            _set_call_active(connected)
+            now = time.monotonic()
+            if connected:
+                _last_connected_seen = now
+                _set_call_active(True)
+            elif _last_connected_seen and now - _last_connected_seen > 2.0:
+                # UIA can briefly lose the call controls while WhatsApp redraws.
+                # Only clear call mode after a short continuous absence.
+                _set_call_active(False)
 
             win, caller, call_type = _incoming_window()
 
