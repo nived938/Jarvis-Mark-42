@@ -2373,8 +2373,14 @@ class JarvisLive:
                             except Exception:
                                 pass
 
+                            self.ui.write_log(
+                                "SYS: Local TTS: "
+                                f"engine={cfg.get('tts_engine', 'edgetts')}, "
+                                f"speaker={cfg.get('output_device') or 'system default'}."
+                            )
                             self._local_tts = create_tts_player(cfg)
 
+                        self.ui.write_log("SYS: Local TTS speaking fast WhatsApp acknowledgement.")
                         self._local_tts.speak(str(text))
                     finally:
                         self._local_tts_speaking = False
