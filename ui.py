@@ -3488,6 +3488,10 @@ class AndroidCastHudView(QWidget):
         root.addWidget(self._hint)
 
         self._host = QFrame()
+        # scrcpy is a foreign Win32 window. Force a native Qt host HWND so
+        # SetParent() always has a stable parent to attach to.
+        self._host.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+        self._host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._host.setStyleSheet(
             f"QFrame {{ background: #000000; border: 1px solid {C.BORDER}; }}"
         )
@@ -3546,9 +3550,22 @@ class AndroidCastHudView(QWidget):
 
             user32 = ctypes.windll.user32
             hwnd = int(hwnd)
-            host_hwnd = int(self._host.winId())
+
+            # Force creation of a real native host HWND before reparenting.
+            self._host.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+            host_hwnd = int(self._host.winId() or 0)
+            if not host_hwnd:
+                self.set_status("EMBED FAILED")
+                self._placeholder.setText(
+                    "ANDROID CAST\n\nCould not create a native Qt host window."
+                )
+                return False
+
             if not user32.IsWindow(ctypes.wintypes.HWND(hwnd)):
                 self.set_status("EMBED FAILED")
+                self._placeholder.setText(
+                    "ANDROID CAST\n\nscrcpy window is no longer valid."
+                )
                 return False
 
             GWL_STYLE = -16
@@ -3562,6 +3579,8 @@ class AndroidCastHudView(QWidget):
             WS_SYSMENU = 0x00080000
             WS_POPUP = 0x80000000
             WS_BORDER = 0x00800000
+            WS_CLIPSIBLINGS = 0x04000000
+            WS_CLIPCHILDREN = 0x02000000
             WS_EX_APPWINDOW = 0x00040000
             WS_EX_TOOLWINDOW = 0x00000080
             SWP_FRAMECHANGED = 0x0020
@@ -3569,7 +3588,9 @@ class AndroidCastHudView(QWidget):
             SWP_NOACTIVATE = 0x0010
             SWP_SHOWWINDOW = 0x0040
 
-            original_parent = int(user32.GetParent(ctypes.wintypes.HWND(hwnd)) or 0)
+            original_parent = int(
+                user32.GetParent(ctypes.wintypes.HWND(hwnd)) or 0
+            )
             original_style = int(user32.GetWindowLongPtrW(
                 ctypes.wintypes.HWND(hwnd), GWL_STYLE
             ))
@@ -3581,21 +3602,32 @@ class AndroidCastHudView(QWidget):
                 original_style
                 & ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME |
                     WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_BORDER)
-            ) | WS_CHILD | WS_VISIBLE
+            ) | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN
             child_exstyle = (
                 original_exstyle & ~WS_EX_APPWINDOW
             ) | WS_EX_TOOLWINDOW
 
-            user32.SetParent(
-                ctypes.wintypes.HWND(hwnd),
-                ctypes.wintypes.HWND(host_hwnd),
-            )
+            # Convert the top-level scrcpy window to a child before reparenting.
             user32.SetWindowLongPtrW(
                 ctypes.wintypes.HWND(hwnd), GWL_STYLE, child_style
             )
             user32.SetWindowLongPtrW(
                 ctypes.wintypes.HWND(hwnd), GWL_EXSTYLE, child_exstyle
             )
+            user32.SetParent(
+                ctypes.wintypes.HWND(hwnd),
+                ctypes.wintypes.HWND(host_hwnd),
+            )
+
+            # Refuse to report success while scrcpy is still a desktop window.
+            actual_parent = int(
+                user32.GetParent(ctypes.wintypes.HWND(hwnd)) or 0
+            )
+            if actual_parent != host_hwnd:
+                raise RuntimeError(
+                    f"SetParent failed, expected host HWND {host_hwnd}, "
+                    f"got {actual_parent}"
+                )
 
             self._foreign_hwnd = hwnd
             self._foreign_parent = original_parent
@@ -3603,14 +3635,16 @@ class AndroidCastHudView(QWidget):
             self._foreign_exstyle = original_exstyle
 
             self._placeholder.hide()
+            width = max(1, int(self._host.width()))
+            height = max(1, int(self._host.height()))
             user32.ShowWindow(ctypes.wintypes.HWND(hwnd), 5)
             user32.SetWindowPos(
                 ctypes.wintypes.HWND(hwnd),
                 ctypes.wintypes.HWND(0),
-                0, 0, max(1, self._host.width()), max(1, self._host.height()),
+                0, 0, width, height,
                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
             )
-            user32.SetFocus(ctypes.wintypes.HWND(hwnd))
+            self._resize_native_window()
             self.set_status("LIVE • DIRECT CONTROL", ok=True)
             return True
         except Exception as exc:
@@ -4808,6 +4842,13 @@ class MainWindow(QMainWindow):
         """Thread-safe entry point: close the animated weather HUD."""
         try:
             self._weather_close_sig.emit()
+        except Exception:
+            pass
+
+    def write_log(self, text: str) -> None:
+        """Thread-safe logging entry point for MainWindow-owned workers."""
+        try:
+            self._log_sig.emit(str(text))
         except Exception:
             pass
 
