@@ -78,13 +78,22 @@ def _compress_silence(
 
 
 def _play_np(samples, sample_rate: int, device=None) -> None:
-    """Play float32 mono (or stereo) audio through the requested device."""
-    sd.play(_to_numpy(samples), sample_rate, device=device or None)
-    sd.wait()
+    """Play float32 audio through the requested device, with a default-device fallback."""
+    arr = _to_numpy(samples)
+    try:
+        sd.play(arr, sample_rate, device=device or None)
+        sd.wait()
+    except Exception as first_err:
+        if not device:
+            raise
+        print(f"[TTS] Output device '{device}' rejected local TTS: {first_err} — retrying system default")
+        sd.stop()
+        sd.play(arr, sample_rate, device=None)
+        sd.wait()
 
 
 def _play_audio_bytes(audio_bytes: bytes, device=None) -> None:
-    """Decode MP3/WAV/OGG bytes and play via sounddevice (uses miniaudio)."""
+    """Decode MP3/WAV/OGG bytes and play with a configured-device fallback."""
     import miniaudio
     decoded = miniaudio.decode(
         audio_bytes,
@@ -92,8 +101,16 @@ def _play_audio_bytes(audio_bytes: bytes, device=None) -> None:
         nchannels=1,
     )
     samples = np.array(decoded.samples, dtype=np.float32)
-    sd.play(samples, decoded.sample_rate, device=device or None)
-    sd.wait()
+    try:
+        sd.play(samples, decoded.sample_rate, device=device or None)
+        sd.wait()
+    except Exception as first_err:
+        if not device:
+            raise
+        print(f"[TTS] Output device '{device}' rejected local TTS: {first_err} — retrying system default")
+        sd.stop()
+        sd.play(samples, decoded.sample_rate, device=None)
+        sd.wait()
 
 
 # ---------------------------------------------------------------------------
