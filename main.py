@@ -2372,7 +2372,9 @@ class JarvisLive:
                         "response_modalities": ["AUDIO"],
                         "speech_config": {
                             "voice_config": {
-                                "voice": _voice,
+                                "prebuilt_voice_config": {
+                                    "voice_name": _voice,
+                                }
                             }
                         },
                     },
