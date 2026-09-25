@@ -114,6 +114,7 @@ Supports:
 - trash and confirmed permanent deletion
 - Windows scheduled sending
 - likely OTP/security/verification code detection
+- non-blocking Gmail OAuth setup with authorization status
 
 ### Smart Gmail Triage
 
