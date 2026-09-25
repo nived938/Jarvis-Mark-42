@@ -1566,31 +1566,45 @@ class JarvisLive:
             return True
 
         # Notification commands are local and always surface their current state
-        # in the center HUD.
+        # in the center HUD.  They also use the main Live session for the brief
+        # spoken acknowledgement, so notification progress can never fall back
+        # to a different/local TTS voice.
         if low in {
             "what notifications do i have",
             "show my notifications",
             "show notifications",
+            "check my notifications",
+            "check notifications",
+            "check my unread notifications",
+            "check unread notifications",
         }:
             result = self._run_local_action("notification_intelligence", {"action": "summary"})
             self.ui.show_content("NOTIFICATIONS • SUMMARY", result)
+            self.speak("Sir, I am checking your notifications.")
             return True
 
         if low in {
             "show important notifications",
             "show important notification",
+            "check important notifications",
+            "check important notification",
+            "check my important notifications",
+            "check my important notification",
         }:
             result = self._run_local_action("notification_intelligence", {"action": "important"})
             self.ui.show_content("NOTIFICATIONS • IMPORTANT", result)
+            self.speak("Sir, I am checking your important notifications.")
             return True
 
         if low in {
             "give me a notification digest",
             "show notification digest",
             "notification digest",
+            "check notification digest",
         }:
             result = self._run_local_action("notification_intelligence", {"action": "digest"})
             self.ui.show_content("NOTIFICATIONS • DIGEST", result)
+            self.speak("Sir, I am preparing the notification digest.")
             return True
 
         quiet_match = _re.fullmatch(
