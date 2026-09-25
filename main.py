@@ -2357,17 +2357,17 @@ class JarvisLive:
                 )
 
                 _client = _genai.Client(api_key=_api_key)
+                # Keep this request deliberately minimal for the installed
+                # google-genai SDK. TTS accepts plain text input; the SDK version
+                # used by JARVIS expects a Content object here rather than the
+                # list-of-dicts form shown by newer examples, and speech_metadata
+                # is not present in that installed schema.
                 _response = _client.models.generate_content(
                     model="gemini-3.8-flash-tts",
-                    contents=[{
-                        "role": "user",
-                        "parts": [{
-                            "text": str(text),
-                            "speech_metadata": {
-                                "style": "natural, concise, confident JARVIS acknowledgement"
-                            },
-                        }],
-                    }],
+                    contents=types.Content(
+                        role="user",
+                        parts=[types.Part(text=str(text))],
+                    ),
                     config={
                         "response_modalities": ["AUDIO"],
                         "speech_config": {
