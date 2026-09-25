@@ -682,15 +682,15 @@ def _select_contact_chat(win, contact: str) -> bool:
         pyautogui.press("enter")
         time.sleep(0.9)
 
-        # Some builds require one Down before Enter because the search field
-        # itself still owns focus. Try that only if the first Enter did not
-        # move into a conversation.
-        if _find_chat_call_button(win, _VOICE_NAMES) is None and _find_chat_call_button(win, _VIDEO_NAMES) is None:
-            pyautogui.press("down")
-            time.sleep(0.15)
-            pyautogui.press("enter")
-            time.sleep(0.8)
+        # Verify the conversation first. Only if the first Enter did not move
+        # into the requested chat do we use the keyboard fallback.
+        if _active_chat_matches_contact(win, contact):
+            return True
 
+        pyautogui.press("down")
+        time.sleep(0.15)
+        pyautogui.press("enter")
+        time.sleep(0.8)
         return _active_chat_matches_contact(win, contact)
     except Exception as exc:
         print(f"[whatsapp_calling] Contact selection failed: {exc}")
@@ -702,11 +702,6 @@ def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
     if not contact:
         return "Please specify a WhatsApp contact."
 
-    # Only one outgoing-call workflow may control WhatsApp at a time. This
-    # prevents simultaneous local/model triggers from changing the selected chat.
-    if not _OUTGOING_CALL_LOCK.acquire(blocking=False):
-        return "A WhatsApp outgoing-call command is already in progress. I will not start another call."
-
     if not _PYAUTOGUI:
         return "PyAutoGUI is not installed, so WhatsApp cannot be controlled."
 
@@ -715,6 +710,11 @@ def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
 
     if _open_messaging_app is None or _search_in_app is None:
         return "The existing WhatsApp messaging helpers are unavailable."
+
+    # Only one outgoing-call workflow may control WhatsApp at a time. This
+    # prevents simultaneous local/model triggers from changing the selected chat.
+    if not _OUTGOING_CALL_LOCK.acquire(blocking=False):
+        return "A WhatsApp outgoing-call command is already in progress. I will not start another call."
 
     try:
         if player:
