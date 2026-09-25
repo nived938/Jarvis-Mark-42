@@ -90,6 +90,7 @@ _SCAN_INTERVAL = 0.8
 _BASE_DIR = Path(__file__).resolve().parent.parent
 _BUTTON_CACHE_PATH = _BASE_DIR / "memory" / "whatsapp_call_button_cache.json"
 _BUTTON_CACHE_LOCK = threading.RLock()
+_OUTGOING_CALL_LOCK = threading.Lock()
 
 
 def _load_button_cache() -> dict:
@@ -701,6 +702,11 @@ def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
     if not contact:
         return "Please specify a WhatsApp contact."
 
+    # Only one outgoing-call workflow may control WhatsApp at a time. This
+    # prevents simultaneous local/model triggers from changing the selected chat.
+    if not _OUTGOING_CALL_LOCK.acquire(blocking=False):
+        return "A WhatsApp outgoing-call command is already in progress. I will not start another call."
+
     if not _PYAUTOGUI:
         return "PyAutoGUI is not installed, so WhatsApp cannot be controlled."
 
@@ -817,6 +823,8 @@ def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
         )
     except Exception as exc:
         return f"Could not start WhatsApp call: {exc}"
+    finally:
+        _OUTGOING_CALL_LOCK.release()
 
 
 def _respond(decision: str, message_text: str = "", player=None) -> str:
