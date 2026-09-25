@@ -1277,7 +1277,47 @@ def _handler(
             contact=str(params.get("contact", "") or ""),
             message_text=str(params.get("message_text", "") or ""),
             video=True,
-            player=playerTOOL = {
+            player=player,
+            speak_exact=speak_exact,
+        )
+
+    if action in {"accept", "answer", "respond_accept"}:
+        return _respond("accept", player=player)
+
+    if action in {"accept_and_speak", "accept_and_tell", "answer_and_speak", "answer_and_tell"}:
+        return _accept_and_speak(
+            message_text=str(params.get("message_text", "") or ""),
+            player=player,
+            speak_exact=speak_exact,
+        )
+
+    if action in {"decline", "reject", "respond_decline"}:
+        message_text = str(params.get("message_text", "") or "").strip()
+        return _respond("decline", message_text=message_text, player=player)
+
+    if action in {"decline_and_message", "decline_message"}:
+        message_text = str(params.get("message_text", "") or "").strip()
+        if not message_text:
+            message_text = "I am busy."
+        return _respond("decline", message_text=message_text, player=player)
+
+    if action in {"status", "incoming_status"}:
+        current = _pending_snapshot()
+        if current is None:
+            return "No incoming WhatsApp call is waiting."
+        return (
+            f"Waiting for your decision on a {current.call_type} WhatsApp call "
+            f"from {current.caller}."
+        )
+
+    return (
+        "Unknown whatsapp_calling action. Use call, call_and_speak, video_call, "
+        "video_call_and_speak, accept, accept_and_speak, decline, "
+        "decline_and_message, or status."
+    )
+
+
+TOOL = {
     "name": "whatsapp_calling",
     "description": (
         "Controls WhatsApp Desktop voice/video calls on Windows. Use call or "
