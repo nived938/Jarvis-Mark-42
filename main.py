@@ -936,6 +936,12 @@ class JarvisLive:
         # no second Gemini speech round-trip is allowed for the same request.
         self._whatsapp_fast_call_active = False
         self._whatsapp_fast_call_started = 0.0
+        # When voice transcription triggers the local WhatsApp fast path,
+        # this event marks the end of the original "call X" Live turn. The
+        # normal JARVIS speech acknowledgement is sent only after that turn
+        # is fully suppressed, so its audio is never discarded by _interrupted.
+        self._whatsapp_fast_turn_done = threading.Event()
+        self._whatsapp_fast_turn_done.set()
         self._trace_id = trace_start_session()
 
         self._client_turn_started = 0.0
@@ -2331,7 +2337,12 @@ class JarvisLive:
         self._whatsapp_call_guard[key] = now
         return True
 
-    async def _start_fast_whatsapp_call(self, contact: str, video: bool = False) -> None:
+    async def _start_fast_whatsapp_call(
+        self,
+        contact: str,
+        video: bool = False,
+        wait_for_live_turn: bool = False,
+    ) -> None:
         action = "video_call" if video else "call"
         self._whatsapp_fast_call_active = True
         self._whatsapp_fast_call_started = time.monotonic()
@@ -2352,6 +2363,25 @@ class JarvisLive:
             )
 
             if str(result).lower().startswith(("voice call started", "video call started")):
+                if wait_for_live_turn:
+                    # The original voice command is deliberately suppressed.
+                    # Wait until its turn_complete arrives before using the
+                    # normal JARVIS speech path. Otherwise _interrupted would
+                    # also discard this acknowledgement's audio.
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.to_thread(
+                                self._whatsapp_fast_turn_done.wait,
+                                2.0,
+                            ),
+                            timeout=2.5,
+                        )
+                    except asyncio.TimeoutError:
+                        # Do not leave the acknowledgement trapped forever if
+                        # the server does not emit turn_complete.
+                        pass
+                    self._interrupted = False
+
                 self.speak(
                     f"Sir, the {'video' if video else 'voice'} call with {contact} has been started."
                 )
@@ -2364,7 +2394,11 @@ class JarvisLive:
             self._client_turn_started = 0.0
             self._client_first_audio_logged = False
 
-    def _try_fast_whatsapp_transcript(self, text: str) -> bool:
+    def _try_fast_whatsapp_transcript(
+        self,
+        text: str,
+        wait_for_live_turn: bool = False,
+    ) -> bool:
         """Start exact WhatsApp call commands before Gemini tool selection."""
         import re as _re
         raw = " ".join(str(text or "").split()).strip()
@@ -2391,6 +2425,13 @@ class JarvisLive:
 
         self._whatsapp_fast_call_active = True
         self._whatsapp_fast_call_started = time.monotonic()
+        # This invocation came from Live input transcription, so suppress only
+        # Gemini's response to the original "call X" turn. The acknowledgement
+        # itself will be sent after that turn completes.
+        _wait_for_live_turn = wait_for_live_turn
+        if _wait_for_live_turn:
+            self._whatsapp_fast_turn_done.clear()
+
         # Silently stop any model audio belonging to this same command. This
         # replaces the old user-visible interrupt() call, which made JARVIS
         # announce "Interrupted — listening..." even though the call was already
@@ -2406,7 +2447,11 @@ class JarvisLive:
         # only works when the current thread already owns a running loop.
         # Always schedule onto JARVIS's real Live loop when called elsewhere.
         _video = bool(video_match)
-        _coro = self._start_fast_whatsapp_call(contact, video=_video)
+        _coro = self._start_fast_whatsapp_call(
+            contact,
+            video=_video,
+            wait_for_live_turn=_wait_for_live_turn,
+        )
         try:
             _running_loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -2423,6 +2468,7 @@ class JarvisLive:
             self._whatsapp_fast_call_active = False
             self._whatsapp_fast_call_started = 0.0
             self._interrupted = False
+            self._whatsapp_fast_turn_done.set()
             self.ui.write_log(
                 "ERR: Fast WhatsApp call could not be scheduled because "
                 "the JARVIS Live loop is not running."
@@ -3452,7 +3498,10 @@ class JarvisLive:
                                 # outgoing WhatsApp call is a tool request.
                                 # Start it as soon as the Live transcription
                                 # contains the complete call command.
-                                if self._try_fast_whatsapp_transcript(self._current_turn_text):
+                                if self._try_fast_whatsapp_transcript(
+                                    self._current_turn_text,
+                                    wait_for_live_turn=True,
+                                ):
                                     # The WhatsApp action is already running locally.
                                     # Drop any model audio/transcript belonging to this
                                     # command instead of waiting for a second Gemini turn.
@@ -3469,6 +3518,9 @@ class JarvisLive:
                             # If this turn_complete ends an interrupted response, clear the
                             # flag and skip all further processing for that turn.
                             if self._interrupted:
+                                # Release the fast-call acknowledgement only after
+                                # the original "call X" Live turn is finished.
+                                self._whatsapp_fast_turn_done.set()
                                 self._interrupted = False
                                 in_buf  = []
                                 out_buf = []
