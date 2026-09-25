@@ -137,14 +137,16 @@ def _is_whatsapp_window(win) -> bool:
     if "whatsapp" in title:
         return True
 
-    # Some WhatsApp call popups use only the contact name as their window
-    # title. Fall back to the owning process name so those popups are still
-    # visible to the incoming-call watcher.
+    # WhatsApp Desktop may expose a contact name rather than "WhatsApp" as the
+    # top-level title. Identify the window through its owning process.
     try:
         pid = int(win.process_id())
         if psutil is not None:
             process_name = _norm(psutil.Process(pid).name())
-            if process_name in {"whatsapp.exe", "whatsapp"}:
+            if "whatsapp" in process_name:
+                return True
+            exe = _norm(psutil.Process(pid).exe())
+            if "whatsapp" in exe:
                 return True
     except Exception:
         pass
@@ -467,10 +469,23 @@ def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
                 f"SYS: Opening WhatsApp and preparing a {'video' if video else 'voice'} call to {contact}."
             )
 
-        if not _open_messaging_app("WhatsApp"):
-            return "Could not open WhatsApp."
+        # Calling must not depend on send_message.py's Start Menu search.
+        # Launch the registered WhatsApp executable directly when available.
+        launched_path = None
+        if _launch_registered_app is not None:
+            try:
+                launched_path = _launch_registered_app("WhatsApp")
+            except Exception as exc:
+                if player:
+                    player.write_log(f"ERR: Direct WhatsApp launch failed — {exc}")
 
-        time.sleep(1.0)
+        if launched_path is None:
+            # Keep the existing launcher only as a last resort for installations
+            # where the executable registry has no usable WhatsApp entry.
+            if _open_messaging_app is None or not _open_messaging_app("WhatsApp"):
+                return "Could not open WhatsApp directly from the app registry."
+
+        time.sleep(1.5)
         _search_in_app(contact)
         time.sleep(0.8)
         pyautogui.press("enter")
