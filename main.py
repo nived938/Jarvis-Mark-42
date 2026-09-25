@@ -2432,13 +2432,20 @@ class JarvisLive:
                 )
                 return
 
+            # _play_audio keeps the HUD in SPEAKING state until the
+            # shared turn-done event is set after its queue drains. This
+            # acknowledgement uses an isolated Live session, so _receive_audio
+            # never sees its turn_complete and cannot set that event for us.
+            # Signal completion explicitly after all PCM has been queued.
+            if self._turn_done_event is not None:
+                self._turn_done_event.set()
+
             self.ui.write_log(
                 "SYS: Fast acknowledgement queued "
                 f"{_audio_bytes} bytes in {_audio_chunks} audio chunks "
                 "using the normal JARVIS audio pipeline "
                 f"(turn complete: {_turn_complete})."
-            )
-        except Exception as exc:
+            )        except Exception as exc:
             self.ui.write_log(f"ERR: Fast JARVIS acknowledgement failed — {exc}")
 
     async def _start_fast_whatsapp_call(
