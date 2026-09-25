@@ -550,6 +550,12 @@ def _respond(decision: str, message_text: str = "", player=None) -> str:
     return f"Declined the incoming {call_type} call from {caller}."
 
 
+def respond_pending_call(decision: str, message_text: str = "", player=None, speak=None) -> str:
+    """Respond to the currently pending incoming WhatsApp call."""
+    bind_runtime(player=player, speak=speak)
+    return _respond(decision, message_text=message_text, player=player)
+
+
 def _handler(parameters, response=None, player=None, speak=None, session_memory=None, **_):
     params = parameters or {}
     action = _norm(params.get("action", "status"))
