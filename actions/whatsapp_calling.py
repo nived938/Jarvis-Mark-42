@@ -152,8 +152,25 @@ def _foreground_whatsapp_rect():
         buf = ctypes.create_unicode_buffer(max(1, length + 1))
         user32.GetWindowTextW(hwnd, buf, len(buf))
         title = _norm(buf.value)
-        if "whatsapp" not in title:
+
+        # WhatsApp may use the current contact name as the window title, so
+        # title matching alone is not reliable. Verify the owning process too.
+        pid = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        process_is_whatsapp = False
+        if psutil is not None and pid.value:
+            try:
+                proc = psutil.Process(int(pid.value))
+                process_is_whatsapp = (
+                    "whatsapp" in _norm(proc.name())
+                    or "whatsapp" in _norm(proc.exe())
+                )
+            except Exception:
+                pass
+
+        if "whatsapp" not in title and not process_is_whatsapp:
             return None
+
         class RECT(ctypes.Structure):
             _fields_ = [
                 ("left", ctypes.c_long),
