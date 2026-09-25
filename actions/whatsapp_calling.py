@@ -133,9 +133,16 @@ def _click_cached_button(win, kind: str) -> tuple[bool, str]:
         if not isinstance(payload, dict):
             return False, ""
 
-        x = int(payload["x"])
-        y = int(payload["y"])
+        cached_x = int(payload["x"])
+        cached_y = int(payload["y"])
+        cached_width = max(1, int(payload.get("window_width", 1)))
+        cached_height = max(1, int(payload.get("window_height", 1)))
+
         rect = win.rectangle()
+        scale_x = rect.width() / cached_width
+        scale_y = rect.height() / cached_height
+        x = int(cached_x * scale_x)
+        y = int(cached_y * scale_y)
         screen_x = rect.left + x
         screen_y = rect.top + y
         if screen_x < rect.left or screen_y < rect.top or screen_x > rect.right or screen_y > rect.bottom:
