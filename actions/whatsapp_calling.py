@@ -30,6 +30,12 @@ except ImportError:
     _PYAUTOGUI = False
 
 try:
+    import pyperclip
+    _PYPERCLIP = True
+except ImportError:
+    _PYPERCLIP = False
+
+try:
     from pywinauto import Desktop
     _PYWINAUTO = True
 except Exception:
@@ -152,6 +158,32 @@ def _click_cached_button(win, kind: str) -> tuple[bool, str]:
         return True, f"cached {kind} call button"
     except Exception:
         return False, ""
+
+
+def _click_chat_call_button(win, candidates: tuple[str, ...], kind: str) -> tuple[bool, str]:
+    """Find the real chat call button, cache it BEFORE clicking, then click it."""
+    button = _find_button(win, candidates)
+    if button is None:
+        return False, ""
+
+    try:
+        name = next(iter(_labels(button)), "button")
+    except Exception:
+        name = "button"
+
+    # Cache before clicking because WhatsApp can remove/rebuild the button
+    # immediately when the call starts.
+    _cache_button_location(win, button, kind)
+
+    try:
+        button.click_input()
+        return True, name
+    except Exception:
+        try:
+            button.invoke()
+            return True, name
+        except Exception:
+            return False, name
 
 
 def _invalidate_button_cache(kind: str) -> None:
@@ -592,6 +624,123 @@ def stop_monitor() -> None:
     _monitor_stop.set()
 
 
+def _paste_search_text(text: str) -> None:
+    if _PYPERCLIP:
+        pyperclip.copy(text)
+        pyautogui.hotkey("ctrl", "v")
+    else:
+        pyautogui.write(text, interval=0.04)
+
+
+def _find_whatsapp_search_box(win):
+    """Find WhatsApp's contact-search edit control in the left sidebar."""
+    try:
+        edits = list(win.descendants(control_type="Edit"))
+    except Exception:
+        return None
+
+    matches = []
+    for edit in edits:
+        labels = [_norm(x) for x in _labels(edit)]
+        joined = " ".join(labels)
+        if "search" not in joined:
+            continue
+        try:
+            if edit.is_visible() and edit.is_enabled():
+                matches.append(edit)
+        except Exception:
+            continue
+
+    if not matches:
+        return None
+
+    try:
+        return sorted(
+            matches,
+            key=lambda control: (
+                control.rectangle().top,
+                control.rectangle().left,
+            ),
+        )[0]
+    except Exception:
+        return matches[0]
+
+
+def _select_contact_chat(win, contact: str) -> bool:
+    """Select the exact requested WhatsApp chat, never a neighboring contact."""
+    target = _norm(contact)
+    search = _find_whatsapp_search_box(win)
+    if search is None:
+        return False
+
+    try:
+        search.click_input()
+        time.sleep(0.15)
+        pyautogui.hotkey("ctrl", "a")
+        pyautogui.press("backspace")
+        time.sleep(0.1)
+        _paste_search_text(contact)
+    except Exception:
+        return False
+
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        exact = []
+        try:
+            win_rect = win.rectangle()
+            sidebar_right = win_rect.left + int(win_rect.width() * 0.45)
+            for control in win.descendants():
+                if target not in [_norm(x) for x in _labels(control)]:
+                    continue
+                try:
+                    rect = control.rectangle()
+                    if not control.is_visible() or not control.is_enabled():
+                        continue
+                    if rect.left > sidebar_right:
+                        continue
+                    exact.append(control)
+                except Exception:
+                    continue
+        except Exception:
+            exact = []
+
+        if exact:
+            try:
+                exact.sort(key=lambda control: (control.rectangle().top, control.rectangle().left))
+            except Exception:
+                pass
+
+            target_control = exact[0]
+            try:
+                target_control.click_input()
+            except Exception:
+                try:
+                    target_control.invoke()
+                except Exception:
+                    return False
+
+            time.sleep(0.6)
+            # Prefer verification in the main chat header. Some builds expose
+            # the header differently, so a successfully clicked exact result
+            # remains acceptable as the fallback.
+            try:
+                win_rect = win.rectangle()
+                header_left = win_rect.left + int(win_rect.width() * 0.45)
+                for control in win.descendants():
+                    if target not in [_norm(x) for x in _labels(control)]:
+                        continue
+                    rect = control.rectangle()
+                    if control.is_visible() and rect.left > header_left and rect.top < win_rect.top + 220:
+                        return True
+            except Exception:
+                pass
+            return True
+
+        time.sleep(0.15)
+
+    return False
+
+
 def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
     contact = str(contact or "").strip()
     if not contact:
@@ -646,11 +795,15 @@ def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
             )
 
         _focus_whatsapp(win)
-        time.sleep(0.4)
-        _search_in_app(contact)
-        time.sleep(0.8)
-        pyautogui.press("enter")
-        time.sleep(1.0)
+        time.sleep(0.3)
+
+        # Ctrl+F can search message text or leave the keyboard selection on a
+        # neighboring chat. Use WhatsApp's actual contact-search field instead.
+        if not _select_contact_chat(win, contact):
+            return (
+                f"WhatsApp could not select the exact chat for {contact}. "
+                "The call was not started."
+            )
 
         windows = _whatsapp_windows()
         if not windows:
@@ -671,32 +824,18 @@ def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
             if player:
                 player.write_log(f"SYS: Used cached WhatsApp {kind} call button.")
         else:
-            ok, button_name = _click_button(win, candidates)
-            if ok:
-                try:
-                    button = _find_button(win, candidates)
-                    if button is not None:
-                        _cache_button_location(win, button, kind)
-                except Exception:
-                    pass
+            # Cache the real call button BEFORE clicking it.
+            ok, button_name = _click_chat_call_button(win, candidates, kind)
 
         if not ok:
-            # Refresh the window tree once because WhatsApp rebuilds the header
-            # after the contact conversation opens, then try the accessibility
-            # lookup again and refresh the cache.
-            time.sleep(0.4)
+            # Refresh the header once, then locate and cache the real call button
+            # before clicking it.
+            time.sleep(0.35)
             windows = _whatsapp_windows()
             win = windows[0] if windows else None
             if win is not None:
                 _focus_whatsapp(win)
-                ok, button_name = _click_button(win, candidates)
-                if ok:
-                    try:
-                        button = _find_button(win, candidates)
-                        if button is not None:
-                            _cache_button_location(win, button, kind)
-                    except Exception:
-                        pass
+                ok, button_name = _click_chat_call_button(win, candidates, kind)
 
         if not ok:
             return (
