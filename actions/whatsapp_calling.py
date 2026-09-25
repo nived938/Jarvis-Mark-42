@@ -883,6 +883,11 @@ def _monitor_loop() -> None:
             elif connected:
                 _last_connected_seen = now
                 _set_call_active(True)
+            elif any_call_ui and _last_connected_seen:
+                # Once a call has been confirmed, keep it active even on WhatsApp
+                # builds that hide the duration timer from UIA.
+                _last_connected_seen = now
+                _set_call_active(True)
             elif any_call_ui and _last_connected_seen == 0.0:
                 # The timer may be hidden from UIA, but the transition from a
                 # previously ringing window to a persistent call-control window
@@ -1207,6 +1212,8 @@ def _wait_for_connected_call(timeout: float = 60.0) -> bool:
         )
 
         if confirmed:
+            global _last_connected_seen
+            _last_connected_seen = time.monotonic()
             player = None
             with _runtime_lock:
                 player = _runtime_player
