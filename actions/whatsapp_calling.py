@@ -164,6 +164,17 @@ def _whatsapp_windows() -> list:
         return []
 
 
+def _wait_for_whatsapp_window(timeout: float = 8.0):
+    """Wait briefly for the real WhatsApp top-level window after launch."""
+    deadline = time.monotonic() + max(0.5, float(timeout))
+    while time.monotonic() < deadline:
+        windows = _whatsapp_windows()
+        if windows:
+            return windows[0]
+        time.sleep(0.25)
+    return None
+
+
 def _focus_whatsapp(win=None) -> None:
     try:
         target = win
@@ -485,7 +496,15 @@ def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
             if _open_messaging_app is None or not _open_messaging_app("WhatsApp"):
                 return "Could not open WhatsApp directly from the app registry."
 
-        time.sleep(1.5)
+        win = _wait_for_whatsapp_window(8.0)
+        if win is None:
+            return (
+                "WhatsApp was launched, but no WhatsApp desktop window could be "
+                "found. Check that the app is running and signed in."
+            )
+
+        _focus_whatsapp(win)
+        time.sleep(0.4)
         _search_in_app(contact)
         time.sleep(0.8)
         pyautogui.press("enter")
