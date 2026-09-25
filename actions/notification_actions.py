@@ -88,6 +88,18 @@ def _handler(parameters=None, **_):
             _save(data)
             return f"Unsnoozed {count} notification(s)."
 
+        if action == "reply":
+            if not item:
+                return f"Notification {ident} was not found."
+            message_id = str(item.get("message_id", "")).strip()
+            body = str(p.get("body", "")).strip()
+            if not message_id:
+                return "This notification has no Gmail message_id, so it cannot be replied to directly."
+            if not body:
+                return "Provide the reply body."
+            from actions.gmail_manager import _send_reply
+            return _send_reply({"message_id": message_id, "body": body})
+
         if action == "remind":
             if not item:
                 return f"Notification {ident} was not found."
@@ -124,7 +136,7 @@ def _handler(parameters=None, **_):
             f"Unread: {sum(1 for x in active if not x.get('read'))}"
         )
 
-    return "Use action search, summary, dismiss, restore, snooze, unsnooze, expire_snoozes, mark_read, mark_unread, or remind."
+    return "Use action search, summary, dismiss, restore, snooze, unsnooze, expire_snoozes, mark_read, mark_unread, reply, or remind."
 
 
 TOOL = {
@@ -136,12 +148,13 @@ TOOL = {
     "parameters": {
         "type": "OBJECT",
         "properties": {
-            "action": {"type": "STRING", "description": "search | summary | dismiss | restore | snooze | unsnooze | expire_snoozes | mark_read | mark_unread | remind"},
+            "action": {"type": "STRING", "description": "search | summary | dismiss | restore | snooze | unsnooze | expire_snoozes | mark_read | mark_unread | reply | remind"},
             "id": {"type": "STRING", "description": "Notification id"},
             "query": {"type": "STRING", "description": "Search text"},
             "minutes": {"type": "INTEGER", "description": "Snooze duration in minutes"},
             "date": {"type": "STRING", "description": "Reminder date YYYY-MM-DD"},
             "time": {"type": "STRING", "description": "Reminder time HH:MM"},
+            "body": {"type": "STRING", "description": "Reply text for a Gmail-backed notification"},
         },
         "required": ["action"],
     },
