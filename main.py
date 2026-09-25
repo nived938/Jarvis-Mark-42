@@ -1220,7 +1220,7 @@ class JarvisLive:
         if (
             _incoming
             and _incoming == self._last_local_command
-            and _now - self._last_local_command_time < 1.5
+            and _now - self._last_local_command_time < 5.0
         ):
             self.ui.write_log("SYS: Duplicate command ignored.")
             return
@@ -1294,6 +1294,11 @@ class JarvisLive:
         low = raw.casefold()
         if not raw:
             return False
+
+        # Audio transcription can deliver the same command again after the local
+        # action has already started, especially while WhatsApp is opening. Keep
+        # the duplicate guard long enough to cover local call startup so the
+        # same WhatsApp call cannot be executed twice.
 
         # WhatsApp call responses are kept local so a short spoken "accept" or
         # "decline" never gets mistaken for a normal conversational reply.
