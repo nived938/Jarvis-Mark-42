@@ -77,7 +77,7 @@ def _registry_candidates(app_name: str) -> list[Path]:
         # Prefer a real application executable over helper/server binaries when
         # multiple entries share the same executable name.
         lower_path = raw_path.casefold()
-        if any(token in lower_path for token in (r"\\bin\\", r"\\tools\\", r"\\node_modules\\", r"\\server\")):
+        if any(token in lower_path for token in (r"\\bin\\", r"\\tools\\", r"\\node_modules\\", "\\\\server\\\")):
             score -= 8
         if "uninstall" in lower_path or "crash" in lower_path or "updater" in lower_path:
             score -= 40
