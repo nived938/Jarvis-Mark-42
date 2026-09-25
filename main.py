@@ -2381,6 +2381,31 @@ class JarvisLive:
                                 f"engine={cfg.get('tts_engine', 'edgetts')}, "
                                 f"speaker={cfg.get('output_device') or 'system default'}."
                             )
+
+                            # The fast local acknowledgement bypasses the normal
+                            # startup dependency path, so make the TTS engine
+                            # self-healing here. The project installer already knows
+                            # exactly which packages EdgeTTS needs, including
+                            # miniaudio for MP3 decoding.
+                            try:
+                                import importlib.util as _importlib_util
+                                _missing_tts = []
+                                if _importlib_util.find_spec("edge_tts") is None:
+                                    _missing_tts.append("edge-tts")
+                                if _importlib_util.find_spec("miniaudio") is None:
+                                    _missing_tts.append("miniaudio")
+                                if _missing_tts:
+                                    self.ui.write_log(
+                                        "SYS: Installing missing local TTS dependency: "
+                                        + ", ".join(_missing_tts)
+                                    )
+                                    from core.installer import install_for_config
+                                    install_for_config(cfg, log=self.ui.write_log)
+                            except Exception as _install_exc:
+                                self.ui.write_log(
+                                    f"ERR: Local TTS dependency repair failed — {_install_exc}"
+                                )
+
                             self._local_tts = create_tts_player(cfg)
 
                         self.ui.write_log("SYS: Local TTS speaking fast WhatsApp acknowledgement.")
