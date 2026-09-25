@@ -79,6 +79,8 @@ class PendingCall:
 _runtime_lock = threading.RLock()
 _runtime_player = None
 _runtime_speak: Optional[Callable[[str], None]] = None
+_runtime_speak_exact: Optional[Callable[[str], None]] = None
+_runtime_set_call_active: Optional[Callable[[bool], None]] = None
 _monitor_thread: Optional[threading.Thread] = None
 _monitor_stop = threading.Event()
 _pending: Optional[PendingCall] = None
@@ -621,6 +623,52 @@ def _classify_call_type(texts: list[str]) -> str:
     return "voice"
 
 
+def _connected_call_state(win) -> bool:
+    """Return True only when WhatsApp exposes controls for an already connected call.
+
+    'calling' and 'ringing' are deliberately excluded because they only mean the
+    other side has not answered yet.
+    """
+    labels = [_norm(x) for x in _all_visible_text(win)]
+    joined = " ".join(labels)
+    connected_markers = (
+        "end call",
+        "hang up",
+        "mute",
+        "unmute",
+        "speaker",
+        "turn off camera",
+        "turn on camera",
+        "video off",
+        "video on",
+    )
+    return any(marker in joined for marker in connected_markers)
+
+
+def _set_call_active(active: bool) -> None:
+    callback = None
+    with _runtime_lock:
+        callback = _runtime_set_call_active
+    if callable(callback):
+        try:
+            callback(bool(active))
+        except Exception:
+            pass
+
+
+def _exact_speak(text: str) -> bool:
+    callback = None
+    with _runtime_lock:
+        callback = _runtime_speak_exact
+    if not callable(callback):
+        return False
+    try:
+        callback(str(text))
+        return True
+    except Exception:
+        return False
+
+
 def _incoming_window() -> tuple[object | None, str, str]:
     for win in _whatsapp_windows():
         labels = _all_visible_text(win)
@@ -710,6 +758,12 @@ def _monitor_loop() -> None:
                     _set_pending(None)
                 continue
 
+            # Once the incoming banner disappears, watch for the connected-call
+            # controls. This is also what clears the call-audio isolation when the
+            # remote party hangs up.
+            connected = _connected_call_state(win)
+            _set_call_active(connected)
+
             signature = f"{_norm(caller)}|{call_type}"
             now = time.monotonic()
 
@@ -738,15 +792,20 @@ def _monitor_loop() -> None:
                     pass
 
 
-def bind_runtime(player=None, speak=None) -> None:
-    """Bind JARVIS's UI/speech callbacks and start incoming-call monitoring."""
-    global _runtime_player, _runtime_speak, _monitor_thread
+def bind_runtime(player=None, speak=None, speak_exact=None, set_call_active=None) -> None:
+    """Bind JARVIS runtime callbacks and start incoming-call monitoring."""
+    global _runtime_player, _runtime_speak, _runtime_speak_exact
+    global _runtime_set_call_active, _monitor_thread
 
     with _runtime_lock:
         if player is not None:
             _runtime_player = player
         if callable(speak):
             _runtime_speak = speak
+        if callable(speak_exact):
+            _runtime_speak_exact = speak_exact
+        if callable(set_call_active):
+            _runtime_set_call_active = set_call_active
 
         if _monitor_thread is not None and _monitor_thread.is_alive():
             return
@@ -964,7 +1023,32 @@ def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
         _OUTGOING_CALL_ACTIVE.clear()
         _OUTGOING_CALL_LOCK.release()
 
-def _respond(decision: str, message_text: str = "", player=None) -> str:
+def _wait_for_connected_call(timeout: float = 30.0) -> bool:
+    deadline = time.monotonic() + max(1.0, float(timeout))
+    while time.monotonic() < deadline:
+        windows = _whatsapp_windows()
+        if any(_connected_call_state(win) for win in windows):
+            _set_call_active(True)
+            return True
+        # If WhatsApp's call UI changes faster than UIA exposes its final controls,
+        # the background monitor will also publish the active state.
+        time.sleep(0.25)
+    return False
+
+
+def _busy_message(incoming: bool, contact: str = "") -> str:
+    if incoming:
+        return "Nived is busy, call him later."
+    name = str(contact or "there").strip() or "there"
+    return f"Hey {name}, Nived is busy."
+
+
+def _respond(
+    decision: str,
+    message_text: str = "",
+    player=None,
+    speak_exact=None,
+) -> str:
     current = _pending_snapshot()
     if current is None:
         return "There is no incoming WhatsApp call waiting for a response."
@@ -1000,7 +1084,7 @@ def _respond(decision: str, message_text: str = "", player=None) -> str:
 
     if message_text.strip():
         if send_message is None:
-            return f"Declined the call, but the existing send_message action is unavailable."
+            return "Declined the call, but the existing send_message action is unavailable."
 
         message_result = send_message(
             parameters={
@@ -1017,19 +1101,151 @@ def _respond(decision: str, message_text: str = "", player=None) -> str:
     return f"Declined the incoming {call_type} call from {caller}."
 
 
-def respond_pending_call(decision: str, message_text: str = "", player=None, speak=None) -> str:
-    """Respond to the currently pending incoming WhatsApp call."""
-    bind_runtime(player=player, speak=speak)
+def _accept_and_speak(
+    message_text: str = "",
+    player=None,
+    speak_exact=None,
+) -> str:
+    current = _pending_snapshot()
+    if current is None:
+        return "There is no incoming WhatsApp call waiting for a response."
+
+    windows = _whatsapp_windows()
+    if not windows:
+        _set_pending(None)
+        return "The incoming WhatsApp call is no longer visible."
+
+    _focus_whatsapp(windows[0])
+    ok, _button_name = _click_button(windows[0], _ACCEPT_NAMES)
+    if not ok:
+        return "Could not find the WhatsApp accept button. The call was not accepted."
+
+    caller = current.caller
+    call_type = current.call_type
+    _set_pending(None)
+    _set_call_active(False)
+
+    if not _wait_for_connected_call(30.0):
+        return (
+            f"Accepted the {call_type} call from {caller}, but it did not reach "
+            "a connected-call state within 30 seconds."
+        )
+
+    spoken = str(message_text or "").strip()
+    if not spoken or _norm(spoken) in {"i am busy", "im busy", "i'm busy", "busy"}:
+        spoken = _busy_message(True, caller)
+
+    if not _exact_speak(spoken):
+        callback = speak_exact
+        if callable(callback):
+            try:
+                callback(spoken)
+            except Exception:
+                pass
+
+    return f"Accepted the incoming {call_type} call from {caller} and spoke: {spoken}"
+
+
+def _call_and_speak(
+    contact: str,
+    message_text: str = "",
+    video: bool = False,
+    player=None,
+    speak_exact=None,
+) -> str:
+    contact = str(contact or "").strip()
+    if not contact:
+        return "Please specify a WhatsApp contact."
+
+    result = _prepare_contact_call(contact, video=video, player=player)
+    if not str(result).lower().startswith(("voice call started", "video call started")):
+        return result
+
+    # The normal outgoing path already clicked the correct cached button. Now wait
+    # until WhatsApp shows the controls of an actually connected call.
+    if not _wait_for_connected_call(30.0):
+        return (
+            f"{result} However, I could not confirm that the call connected, "
+            "so I did not speak into it."
+        )
+
+    spoken = str(message_text or "").strip()
+    if not spoken or _norm(spoken) in {"i am busy", "im busy", "i'm busy", "busy"}:
+        spoken = _busy_message(False, contact)
+
+    if not _exact_speak(spoken):
+        callback = speak_exact
+        if callable(callback):
+            try:
+                callback(spoken)
+            except Exception:
+                pass
+
+    return f"{result} and spoke: {spoken}"
+
+
+def _respond_extended(
+    decision: str,
+    message_text: str = "",
+    player=None,
+    speak=None,
+    speak_exact=None,
+) -> str:
+    bind_runtime(
+        player=player,
+        speak=speak,
+        speak_exact=speak_exact,
+    )
+    if decision in {"accept_and_speak", "call_and_speak"}:
+        if decision == "accept_and_speak":
+            return _accept_and_speak(message_text=message_text, player=player, speak_exact=speak_exact)
     return _respond(decision, message_text=message_text, player=player)
 
 
-def _handler(parameters, response=None, player=None, speak=None, session_memory=None, **_):
+
+def respond_pending_call(
+    decision: str,
+    message_text: str = "",
+    player=None,
+    speak=None,
+    speak_exact=None,
+) -> str:
+    """Respond to the currently pending incoming WhatsApp call."""
+    bind_runtime(
+        player=player,
+        speak=speak,
+        speak_exact=speak_exact,
+    )
+    decision = _norm(decision)
+    if decision in {"accept_and_speak", "accept_speak"}:
+        return _accept_and_speak(
+            message_text=message_text,
+            player=player,
+            speak_exact=speak_exact,
+        )
+    return _respond(decision, message_text=message_text, player=player)
+
+
+def _handler(
+    parameters,
+    response=None,
+    player=None,
+    speak=None,
+    speak_exact=None,
+    set_call_active=None,
+    session_memory=None,
+    **_,
+):
     params = parameters or {}
     action = _norm(params.get("action", "status"))
 
-    # Any explicit use of this action also guarantees the background watcher
-    # has JARVIS's current speech/UI callbacks.
-    bind_runtime(player=player, speak=speak)
+    # Any explicit use also guarantees the watcher has current runtime callbacks.
+    bind_runtime(
+        player=player,
+        speak=speak,
+        speak_exact=speak_exact,
+        set_call_active=set_call_active,
+    )
 
     if action in {"call", "voice_call", "audio_call"}:
         return _prepare_contact_call(
@@ -1045,48 +1261,34 @@ def _handler(parameters, response=None, player=None, speak=None, session_memory=
             player=player,
         )
 
-    if action in {"accept", "answer", "respond_accept"}:
-        return _respond("accept", player=player)
-
-    if action in {"decline", "reject", "respond_decline"}:
-        message_text = str(params.get("message_text", "") or "").strip()
-        return _respond("decline", message_text=message_text, player=player)
-
-    if action in {"decline_and_message", "decline_message"}:
-        message_text = str(params.get("message_text", "") or "").strip()
-        if not message_text:
-            message_text = "I am busy."
-        return _respond("decline", message_text=message_text, player=player)
-
-    if action in {"status", "incoming_status"}:
-        current = _pending_snapshot()
-        if current is None:
-            return "No incoming WhatsApp call is waiting."
-        return (
-            f"Waiting for your decision on a {current.call_type} WhatsApp call "
-            f"from {current.caller}."
+    if action in {"call_and_speak", "call_and_tell", "speak_on_call"}:
+        return _call_and_speak(
+            contact=str(params.get("contact", "") or ""),
+            message_text=str(params.get("message_text", "") or ""),
+            video=False,
+            player=player,
+            speak_exact=speak_exact,
         )
 
-    return (
-        "Unknown whatsapp_calling action. Use call, video_call, accept, decline, "
-        "decline_and_message, or status."
-    )
-
-
-TOOL = {
+    if action in {"video_call_and_speak", "video_call_and_tell"}:
+        return _call_and_speak(
+            contact=str(params.get("contact", "") or ""),
+            message_text=str(params.get("message_text", "") or ""),
+            video=True,
+            player=playerTOOL = {
     "name": "whatsapp_calling",
     "description": (
-        "Controls WhatsApp Desktop voice/video calls on Windows. For 'call amma' "
-        "or 'video call amma', open WhatsApp, search the contact, open the chat, "
-        "and click the native voice or video call button. Also monitors incoming "
-        "WhatsApp voice/video calls. When an incoming call is detected, JARVIS "
-        "asks the user whether to accept or decline. Use accept/answer or "
-        "decline/reject for the user's response. If the user says 'decline and "
-        "message them I am busy', decline the call first and then use the existing "
-        "send_message action to send that exact message to the caller. For one user "
-        "request, start an outgoing call at most once. Do not issue a second call "
-        "tool request after a successful start. Do not claim a call started or ended "
-        "unless the WhatsApp button was actually found and clicked."
+        "Controls WhatsApp Desktop voice/video calls on Windows. Use call or "
+        "video_call for ordinary calls. Use call_and_speak for 'call Amma and "
+        "tell her I am busy': it starts the existing fast call path, waits until "
+        "the call is actually connected, then speaks the exact message through "
+        "JARVIS's normal Live voice so the caller can hear it through the PC "
+        "microphone. Use accept_and_speak for an incoming call: accept it, wait "
+        "for connection, then speak the exact message. If the message is omitted "
+        "or says 'I am busy', incoming calls use 'Nived is busy, call him later.' "
+        "and outgoing calls use 'Hey <contact>, Nived is busy.' Do not speak "
+        "before WhatsApp reaches a connected-call state. Incoming calls are "
+        "still detected by the background watcher and announced to the user."
     ),
     "behavior": "NON_BLOCKING",
     "scheduling": "SILENT",
@@ -1096,7 +1298,8 @@ TOOL = {
             "action": {
                 "type": "STRING",
                 "description": (
-                    "call | video_call | accept | decline | decline_and_message | status"
+                    "call | video_call | call_and_speak | video_call_and_speak | "
+                    "accept | accept_and_speak | decline | decline_and_message | status"
                 ),
             },
             "contact": {
@@ -1106,8 +1309,8 @@ TOOL = {
             "message_text": {
                 "type": "STRING",
                 "description": (
-                    "Optional message to send after declining. For example: "
-                    "'I am busy.'"
+                    "Exact sentence JARVIS should speak to the WhatsApp caller. "
+                    "For 'I am busy', JARVIS uses the built-in Nived busy phrase."
                 ),
             },
         },
