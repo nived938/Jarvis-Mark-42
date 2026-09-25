@@ -206,6 +206,46 @@ def _bounds_center(bounds: str) -> tuple[int, int] | None:
     return ((x1 + x2) // 2, (y1 + y2) // 2)
 
 
+def _display_size(serial: str) -> tuple[int, int]:
+    """Return the current Android display size, with a safe fallback."""
+    ok, out = _run([*_device_arg(serial), "shell", "wm", "size"], timeout=10)
+    if ok:
+        match = re.search(r"(?:Physical|Override) size:\s*(\d+)x(\d+)", out)
+        if match:
+            return int(match.group(1)), int(match.group(2))
+    return 1080, 1920
+
+
+def _keyguard_state(serial: str) -> bool | None:
+    """Return True when a visible keyguard is detected, False when dismissed."""
+    ok, out = _run([
+        *_device_arg(serial), "shell", "dumpsys", "window", "windows"
+    ], timeout=15)
+    if not ok:
+        return None
+    text = out.casefold()
+
+    # Android versions/OEMs expose different keyguard fields.
+    locked_markers = (
+        "is_keyguard_showing=true",
+        "mshowinglockscreen=true",
+        "mkeyguardgoingaway=false",
+        "keyguardshowing=true",
+        "keyguard=true",
+    )
+    unlocked_markers = (
+        "is_keyguard_showing=false",
+        "mshowinglockscreen=false",
+        "keyguardshowing=false",
+    )
+
+    if any(marker in text for marker in locked_markers):
+        return True
+    if any(marker in text for marker in unlocked_markers):
+        return False
+    return None
+
+
 def _current_activity(serial: str) -> str:
     ok, out = _run([*_device_arg(serial), "shell", "dumpsys", "activity", "activities"], timeout=15)
     if not ok:
@@ -263,26 +303,78 @@ def _handler(parameters, player=None, **_):
 
     # ---- lock-screen assistance ------------------------------------------
     if action in {"unlock", "unlock_assist"}:
+        serial_args = _device_arg(serial)
+
+        # Wake the screen first.
         ok, out = _run([
-            *_device_arg(serial), "shell", "input", "keyevent", "224"
+            *serial_args, "shell", "input", "keyevent", "224"
         ], timeout=10)
-        wake_result = out or ("Phone screen awakened." if ok else "Could not wake the phone.")
+        wake_result = out or (
+            "Phone screen awakened." if ok else "Could not wake the phone."
+        )
+        time.sleep(0.35)
+
+        # Ask Android to dismiss a non-secure keyguard. This never bypasses a
+        # PIN, password, or pattern.
+        dismiss_outputs = []
+        for command in (
+            ["shell", "wm", "dismiss-keyguard"],
+            ["shell", "cmd", "statusbar", "dismiss-keyguard"],
+        ):
+            ok_d, out_d = _run([*serial_args, *command], timeout=10)
+            if out_d:
+                dismiss_outputs.append(out_d)
+
+        # Perform the normal swipe-up gesture used by Android lock screens.
+        width, height = _display_size(serial)
+        x = width // 2
+        y1 = max(1, int(height * 0.86))
+        y2 = max(1, int(height * 0.28))
+        swipe_ok, swipe_out = _run([
+            *serial_args, "shell", "input", "swipe",
+            str(x), str(y1), str(x), str(y2), "350"
+        ], timeout=10)
+
+        # Older/non-secure lock screens may accept MENU as a dismissal hint.
+        _run([*serial_args, "shell", "input", "keyevent", "82"], timeout=5)
+
+        time.sleep(0.35)
+        keyguard = _keyguard_state(serial)
+
+        if keyguard is False:
+            unlock_result = (
+                "The phone appears unlocked. "
+                "The screen was awakened, Android's keyguard dismissal was requested, "
+                "and the standard swipe-up unlock gesture was sent."
+            )
+        elif keyguard is True:
+            unlock_result = (
+                "The phone is awake and the lock screen is visible. "
+                "A secure PIN, password, or pattern is still required. "
+                "JARVIS will not bypass Android authentication."
+            )
+        else:
+            unlock_result = (
+                "The phone was awakened and the standard unlock gesture was sent. "
+                "I could not reliably determine the final keyguard state."
+            )
 
         cast_result = ""
         if player and hasattr(player, "android_cast_status") and hasattr(player, "start_android_cast"):
             try:
                 cast_status = str(player.android_cast_status())
                 if "not running" in cast_status.lower():
-                    cast_result = str(player.start_android_cast(serial=serial, audio=False))
+                    cast_result = str(
+                        player.start_android_cast(serial=serial, audio=False)
+                    )
             except Exception as exc:
                 cast_result = f"Could not open the Android HUD: {exc}"
 
         return (
             "Android unlock assistance is ready. "
-            + wake_result
+            + wake_result + " "
+            + unlock_result
             + (" " + cast_result if cast_result else "")
-            + " The phone's lock pattern/PIN/password must be entered manually in the Android Command Center; "
-              "JARVIS does not store or enter authentication credentials."
         )
 
     # ---- apps --------------------------------------------------------------
