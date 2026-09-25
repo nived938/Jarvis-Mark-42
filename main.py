@@ -2254,16 +2254,29 @@ class JarvisLive:
         if m and not any(x in low for x in ("website", "url", "http")):
             app_name = m.group(1).strip()
             if app_name:
-                # Try the idle-built personal file index first. This makes
-                # "open my project file" fast without another model round trip.
-                try:
-                    from actions.file_indexer import file_indexer
-                    indexed = str(file_indexer({"action": "open", "query": app_name}))
-                    if indexed.startswith("Opened "):
-                        self.ui.write_log("SYS: " + indexed)
-                        return True
-                except Exception:
-                    pass
+                # Only use the file index for commands that clearly refer to
+                # a file/path. Generic app names such as "open vscode" must never
+                # be treated as file searches, or a matching path such as
+                # ".vscode\\argv.json" can steal the command.
+                looks_like_file = bool(
+                    _re.search(r"(?:[A-Za-z]:[\\/]|[\\/])", app_name)
+                    or _re.search(
+                        r"\\.(?:exe|lnk|json|txt|pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|zip|rar|7z|py|js|ts|html|css)$",
+                        app_name,
+                        flags=_re.IGNORECASE,
+                    )
+                    or bool(_re.search(r"\\b(?:file|document|folder|directory|project file)\\b", app_name, flags=_re.IGNORECASE))
+                )
+                if looks_like_file:
+                    try:
+                        from actions.file_indexer import file_indexer
+                        indexed = str(file_indexer({"action": "open", "query": app_name}))
+                        if indexed.startswith("Opened "):
+                            self.ui.write_log("SYS: " + indexed)
+                            return True
+                    except Exception:
+                        pass
+
                 self._run_local_action("open_app", {"app_name": app_name})
                 return True
         return False
