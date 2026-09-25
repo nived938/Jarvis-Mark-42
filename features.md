@@ -222,14 +222,30 @@ Weather checks use the Weatherstack action and a temporary JARVIS HUD.
 
 The background refresh path does not intentionally open the weather HUD.
 
+## WhatsApp calling
+
+actions/whatsapp_calling.py
+
+- fast outgoing WhatsApp voice/video calls using the existing cached native call-button path
+- continuous incoming WhatsApp voice/video call detection
+- caller-name announcement before answering
+- accept/answer and decline/reject controls
+- accept-and-speak: accept an incoming call, wait for the call to connect, then speak an exact message through the normal JARVIS Live voice
+- call-and-speak: call a contact, wait for the call to connect, then speak an exact message
+- built-in busy phrases:
+  - incoming: "Nived is busy, call him later."
+  - outgoing: "Hey <contact>, Nived is busy."
+- while a WhatsApp call is connected, the PC microphone remains available to WhatsApp but its PCM is not forwarded to Gemini, preventing the caller's speech from becoming JARVIS commands
+- call-state monitoring with a short UI-detection grace period so transient WhatsApp UI redraws do not drop the call state
+- exact caller speech uses the same Gemini Live voice and JARVIS speaker pipeline as normal JARVIS output; no separate TTS engine or audio bridge is required
+
 ## Removed features
 
 The current branch intentionally does not include:
 
 - Guest Mode
-- WhatsApp voice/video calling
 
-These should not be reintroduced accidentally while documenting or extending the project.
+Do not reintroduce removed features accidentally while documenting or extending the project.
 
 ## Local AI and voice profiles
 
