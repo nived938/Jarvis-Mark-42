@@ -2365,6 +2365,11 @@ class JarvisLive:
                                         ):
                                             if _key in _cfg:
                                                 cfg[_key] = _cfg[_key]
+
+                            # Route local speech through the same speaker JARVIS
+                            # is configured to use. The old standalone TTS path
+                            # used sounddevice's system default instead.
+                            cfg["output_device"] = get_output_device()
                             except Exception:
                                 pass
 
