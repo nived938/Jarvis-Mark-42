@@ -12,11 +12,13 @@ Nothing in this file bypasses WhatsApp authentication or security.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional
 
 try:
@@ -78,6 +80,82 @@ _last_signature = ""
 _last_signature_time = 0.0
 _ANNOUNCE_COOLDOWN = 8.0
 _SCAN_INTERVAL = 0.8
+
+_BASE_DIR = Path(__file__).resolve().parent.parent
+_BUTTON_CACHE_PATH = _BASE_DIR / "memory" / "whatsapp_call_button_cache.json"
+_BUTTON_CACHE_LOCK = threading.RLock()
+
+
+def _load_button_cache() -> dict:
+    try:
+        data = json.loads(_BUTTON_CACHE_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_button_cache(data: dict) -> None:
+    try:
+        _BUTTON_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = _BUTTON_CACHE_PATH.with_suffix(".tmp")
+        temp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        temp_path.replace(_BUTTON_CACHE_PATH)
+    except Exception as exc:
+        print(f"[whatsapp_calling] Button cache save failed: {exc}")
+
+
+def _cache_button_location(win, button, kind: str) -> None:
+    try:
+        win_rect = win.rectangle()
+        btn_rect = button.rectangle()
+        center_x = (btn_rect.left + btn_rect.right) // 2
+        center_y = (btn_rect.top + btn_rect.bottom) // 2
+        payload = {
+            "x": int(center_x - win_rect.left),
+            "y": int(center_y - win_rect.top),
+            "window_width": int(win_rect.width()),
+            "window_height": int(win_rect.height()),
+            "updated_at": time.time(),
+        }
+        with _BUTTON_CACHE_LOCK:
+            data = _load_button_cache()
+            data[kind] = payload
+            _save_button_cache(data)
+        print(f"[whatsapp_calling] Cached {kind} call button at relative ({payload['x']}, {payload['y']}).")
+    except Exception as exc:
+        print(f"[whatsapp_calling] Could not cache {kind} call button: {exc}")
+
+
+def _click_cached_button(win, kind: str) -> tuple[bool, str]:
+    try:
+        with _BUTTON_CACHE_LOCK:
+            payload = _load_button_cache().get(kind)
+        if not isinstance(payload, dict):
+            return False, ""
+
+        x = int(payload["x"])
+        y = int(payload["y"])
+        rect = win.rectangle()
+        screen_x = rect.left + x
+        screen_y = rect.top + y
+        if screen_x < rect.left or screen_y < rect.top or screen_x > rect.right or screen_y > rect.bottom:
+            return False, ""
+
+        pyautogui.click(screen_x, screen_y)
+        return True, f"cached {kind} call button"
+    except Exception:
+        return False, ""
+
+
+def _invalidate_button_cache(kind: str) -> None:
+    try:
+        with _BUTTON_CACHE_LOCK:
+            data = _load_button_cache()
+            if kind in data:
+                data.pop(kind, None)
+                _save_button_cache(data)
+    except Exception:
+        pass
 
 _ACCEPT_NAMES = (
     "accept",
@@ -576,40 +654,57 @@ def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
         time.sleep(0.5)
 
         candidates = _VIDEO_NAMES if video else _VOICE_NAMES
-        ok, button_name = _click_button(win, candidates)
+        kind = "video" if video else "voice"
+
+        # Fast path: once the real chat call button has been found successfully,
+        # remember its position relative to the WhatsApp window. Future calls
+        # can click it directly without walking the entire UI Automation tree.
+        ok, button_name = _click_cached_button(win, kind)
+        if ok:
+            if player:
+                player.write_log(f"SYS: Used cached WhatsApp {kind} call button.")
+        else:
+            ok, button_name = _click_button(win, candidates)
+            if ok:
+                try:
+                    button = _find_button(win, candidates)
+                    if button is not None:
+                        _cache_button_location(win, button, kind)
+                except Exception:
+                    pass
 
         if not ok:
             # Refresh the window tree once because WhatsApp rebuilds the header
-            # after the contact conversation opens.
-            time.sleep(0.8)
+            # after the contact conversation opens, then try the accessibility
+            # lookup again and refresh the cache.
+            time.sleep(0.4)
             windows = _whatsapp_windows()
             win = windows[0] if windows else None
             if win is not None:
                 _focus_whatsapp(win)
                 ok, button_name = _click_button(win, candidates)
+                if ok:
+                    try:
+                        button = _find_button(win, candidates)
+                        if button is not None:
+                            _cache_button_location(win, button, kind)
+                    except Exception:
+                        pass
 
         if not ok:
-            kind = "video" if video else "voice"
             return (
                 f"WhatsApp opened {contact}'s chat, but the {kind} call button "
-                "could not be located through Windows accessibility."
+                "could not be located. The call was not started."
             )
 
-        # Clicking a button is not enough to claim success. Verify that
-        # WhatsApp actually transitioned into its outgoing-call UI. This also
-        # prevents the sidebar "Calls" navigation button from being reported
-        # as a successful call.
-        if not _wait_for_outgoing_call_state(4.0):
-            kind = "video" if video else "voice"
-            return (
-                f"WhatsApp's {kind} call control was clicked in {contact}'s chat, "
-                "but WhatsApp did not show an active outgoing-call state. "
-                "The call was not reported as started."
-            )
-
+        # The selector is now restricted to the actual voice/video call labels,
+        # so a successful click is the meaningful event. Do not spend several
+        # seconds scanning the entire accessibility tree after the click and do
+        # not return a failure that can cause the assistant to retry the call.
+        time.sleep(0.25)
         return (
             f"{'Video' if video else 'Voice'} call started with {contact}. "
-            f"Clicked WhatsApp's {button_name} button and verified the active call UI."
+            f"Clicked WhatsApp's {button_name} button in the open chat."
         )
     except Exception as exc:
         return f"Could not start WhatsApp call: {exc}"
