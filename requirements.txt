@@ -7,6 +7,7 @@
 # fresh clone on the day it ships. Minor and patch updates flow in freely.
 
 # ── Core: UI, audio, Gemini Live ──────────────────────────────────────────────
+edge-tts>=7,<8
 # PyQt6 and numpy also carry the holographic avatar: the head is rendered in
 # software with QPainter and posed with numpy, so the face costs no extra
 # package, no OpenGL and no GPU. Nothing below was added for it.
