@@ -1359,34 +1359,11 @@ class JarvisLive:
         except Exception as exc:
             self.ui.write_log(f"ERR: WhatsApp call response failed — {exc}")
 
-        # Exact local routing for the requested WhatsApp calling phrases.
-        video_call = _re.fullmatch(
-            r"(?:whatsapp )?video call (.+)", raw, flags=_re.IGNORECASE
-        )
-        if video_call:
-            contact = video_call.group(1).strip()
-            self.speak(f"Sir, calling {contact} on WhatsApp now.")
-            result = self._run_local_action(
-                "whatsapp_calling",
-                {"action": "video_call", "contact": contact},
-            )
-            self.speak("Sir, " + str(result))
-            return True
-
-        voice_call = _re.fullmatch(
-            r"(?:whatsapp )?call (.+)", raw, flags=_re.IGNORECASE
-        )
-        if voice_call and voice_call.group(1).strip() not in {
-            "jarvis", "me", "a cab", "an uber", "a taxi", "someone"
-        }:
-            contact = voice_call.group(1).strip()
-            self.speak(f"Sir, calling {contact} on WhatsApp now.")
-            result = self._run_local_action(
-                "whatsapp_calling",
-                {"action": "call", "contact": contact},
-            )
-            self.speak("Sir, " + str(result))
-            return True
+        # Outgoing WhatsApp calls are intentionally NOT handled by the local
+        # text fast-path. The same spoken command can also arrive through
+        # Gemini Live tool calling, and running both paths can open WhatsApp
+        # twice or leave the first contact in the search box. The single
+        # whatsapp_calling action below is the source of truth for outgoing calls.
 
         if any(k in low for k in ("wake up jarvis", "wake jarvis")):
             self.wake(reason="local command")
