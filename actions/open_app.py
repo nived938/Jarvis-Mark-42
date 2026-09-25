@@ -95,6 +95,54 @@ def _registry_candidates(app_name: str) -> list[Path]:
     return unique
 
 
+def _launch_windows_app_registration(app_name: str) -> str | None:
+    """Launch a registered Windows Store/UWP app without opening Windows Search."""
+    if _SYSTEM != "Windows":
+        return None
+
+    query = str(app_name or "").strip().replace("'", "''")
+    if not query:
+        return None
+
+    script = (
+        "$a = Get-StartApps | Where-Object { $_.Name -like '*"
+        + query
+        + "*' } | Select-Object -First 1; "
+        "if ($a) { $a.AppID }"
+    )
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        app_id = (result.stdout or "").strip().splitlines()[0] if result.stdout else ""
+        if not app_id:
+            return None
+
+        shell_target = "shell:AppsFolder\\" + app_id
+        subprocess.Popen(
+            ["explorer.exe", shell_target],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        time.sleep(1.5)
+        return shell_target
+    except Exception as exc:
+        print(f"[open_app] Windows app registration launch failed: {exc}")
+        return None
+
+
 def _launch_registered_app(app_name: str) -> Path | None:
     """Launch the registered executable directly, without Windows Search."""
     for exe in _registry_candidates(app_name):
@@ -350,6 +398,14 @@ def open_app(
             registered = _launch_registered_app(app_name)
             if registered is not None:
                 message = f"Opened {app_name} directly: {registered}"
+                print(f"[open_app] {message}")
+                if player:
+                    player.write_log(f"[open_app] {message}")
+                return f"Opened {app_name}."
+
+            uwp = _launch_windows_app_registration(app_name)
+            if uwp is not None:
+                message = f"Opened {app_name} through Windows app registration: {uwp}"
                 print(f"[open_app] {message}")
                 if player:
                     player.write_log(f"[open_app] {message}")
