@@ -4225,6 +4225,7 @@ class MainWindow(QMainWindow):
     _android_cast_start_sig = pyqtSignal(str, bool)
     _android_cast_attach_sig = pyqtSignal(int)
     _android_cast_detach_sig = pyqtSignal()
+    _hud_close_sig = pyqtSignal()
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -4364,6 +4365,8 @@ class MainWindow(QMainWindow):
         self._hud_cam_stack.addWidget(self._local_ai_hud)
         self._hud_cam_stack.addWidget(self._geo_maps_hud)
         self._hud_cam_stack.addWidget(self._android_cast_hud)
+        self._hud_index = 0
+        self._hud_cam_stack.currentChanged.connect(self._on_hud_index_changed)
 
         self._center_split = QSplitter(Qt.Orientation.Vertical)
         self._center_split.setStyleSheet(f"""
@@ -4440,6 +4443,7 @@ class MainWindow(QMainWindow):
         self._android_cast_start_sig.connect(self._start_android_cast_on_qt_thread)
         self._android_cast_attach_sig.connect(self._attach_android_cast_on_qt_thread)
         self._android_cast_detach_sig.connect(self._detach_android_cast_on_qt_thread)
+        self._hud_close_sig.connect(self.close_active_hud)
         self._android_cast_proc = None
         self._android_cast_hwnd = 0
         self._android_cast_attached = False
@@ -4769,23 +4773,19 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _on_hud_index_changed(self, index: int) -> None:
+        # Keep a plain integer cache so worker threads never query Qt widgets.
+        self._hud_index = int(index)
+
     def is_weather_hud_open(self) -> bool:
-        try:
-            return self._hud_cam_stack.currentIndex() == 2 and self._weather_view.isVisible()
-        except Exception:
-            return False
+        return self._hud_index == 2
+
 
     def is_camera_hud_open(self) -> bool:
-        try:
-            return self._hud_cam_stack.currentIndex() == 1
-        except Exception:
-            return False
+        return self._hud_index == 1
 
     def is_android_cast_hud_open(self) -> bool:
-        try:
-            return self._hud_cam_stack.currentIndex() == 6
-        except Exception:
-            return False
+        return self._hud_index == 6
 
     def is_any_hud_open(self) -> bool:
         try:
@@ -7799,20 +7799,20 @@ class JarvisUI:
 
     def is_weather_hud_open(self) -> bool:
         try:
-            return bool(self._win.is_weather_hud_open())
+            return bool(self._win._hud_index == 2)
         except Exception:
             return False
 
     def is_camera_hud_open(self) -> bool:
         try:
-            return bool(self._win.is_camera_hud_open())
+            return bool(self._win._hud_index == 1)
         except Exception:
             return False
 
     def is_android_cast_hud_open(self) -> bool:
         """Return whether the Android scrcpy HUD is currently active."""
         try:
-            return bool(self._win.is_android_cast_hud_open())
+            return bool(self._win._hud_index == 6)
         except Exception:
             return False
 
@@ -7891,14 +7891,14 @@ class JarvisUI:
 
     def is_any_hud_open(self) -> bool:
         try:
-            return bool(self._win.is_any_hud_open())
+            return bool(self._win._hud_index in (1, 2, 3, 4, 5, 6))
         except Exception:
             return False
 
     def close_active_hud(self) -> None:
-        """Thread-safe: close whichever temporary center HUD is active."""
+        """Thread-safe: request HUD closure on the Qt GUI thread."""
         try:
-            self._win.close_active_hud()
+            self._win._hud_close_sig.emit()
         except Exception:
             pass
 
