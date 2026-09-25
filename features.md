@@ -104,7 +104,25 @@ Supports:
 - unread inbox messages
 - Gmail search queries
 - reading a message
+- compose/send email
+- reply
+- forward
+- drafts and draft listing
+- archive
+- mark read/unread
+- labels
+- trash and confirmed permanent deletion
+- Windows scheduled sending
 - likely OTP/security/verification code detection
+
+### Smart Gmail Triage
+
+`gmail_triage.py`
+
+- classifies inbox mail into security, urgent, work, billing, newsletter, or personal
+- assigns priority levels and stores triage results locally
+- optional JARVIS/* Gmail labels
+- triage summaries and message-level details
 
 ### Calendar
 
@@ -119,6 +137,13 @@ Supports:
 - event deletion
 - calendar listing
 
+## People Intelligence
+
+- persistent local people profiles
+- aliases, tags, phone, email and notes
+- cross-linking with recent Gmail activity
+- cross-linking with upcoming Calendar activity
+
 ## Desktop monitoring
 
 - application crash guardian
@@ -126,6 +151,8 @@ Supports:
 - download watcher
 - automatic download organizer
 - screen-change sentinel
+- continuous semantic screen watch with Gemini vision
+- meaningful-event detection for crashes, build failures, login/security warnings, failed downloads and permission errors
 - local audio-event detection
 - optional gesture recognition
 
@@ -222,6 +249,11 @@ These should not be reintroduced accidentally while documenting or extending the
 ## Notification intelligence
 
 - Automatic notification categorization and priority levels
+- actionable notification controls: dismiss, restore, snooze, unsnooze, search
+- mark read/unread
+- convert a notification into a scheduled reminder
+- reply to Gmail-backed notifications when a message ID is attached
+
 - Repeated-alert deduplication with occurrence counts
 - Important/critical filtering
 - Notification digests and unread summaries
