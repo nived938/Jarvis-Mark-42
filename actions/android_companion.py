@@ -261,6 +261,30 @@ def _handler(parameters, player=None, **_):
             return "The JARVIS Android HUD is not available."
         return player.android_cast_status()
 
+    # ---- lock-screen assistance ------------------------------------------
+    if action in {"unlock", "unlock_assist"}:
+        ok, out = _run([
+            *_device_arg(serial), "shell", "input", "keyevent", "224"
+        ], timeout=10)
+        wake_result = out or ("Phone screen awakened." if ok else "Could not wake the phone.")
+
+        cast_result = ""
+        if player and hasattr(player, "android_cast_status") and hasattr(player, "start_android_cast"):
+            try:
+                cast_status = str(player.android_cast_status())
+                if "not running" in cast_status.lower():
+                    cast_result = str(player.start_android_cast(serial=serial, audio=False))
+            except Exception as exc:
+                cast_result = f"Could not open the Android HUD: {exc}"
+
+        return (
+            "Android unlock assistance is ready. "
+            + wake_result
+            + (" " + cast_result if cast_result else "")
+            + " The phone's lock pattern/PIN/password must be entered manually in the Android Command Center; "
+              "JARVIS does not store or enter authentication credentials."
+        )
+
     # ---- apps --------------------------------------------------------------
     if action == "apps":
         ok, out = _run(
@@ -588,7 +612,9 @@ TOOL = {
     "name": "android_companion",
     "description": (
         "Full Android control through ADB plus a live scrcpy cast embedded directly "
-        "inside the JARVIS HUD. No Android companion app is installed. Supports device "
+        "inside the JARVIS HUD. Android unlock assistance only wakes the phone and opens the cast; "
+        "the actual lock pattern/PIN/password is always entered manually. "
+        "No Android companion app is installed. Supports device "
         "discovery, wireless connect/disconnect, live cast start/stop, direct mouse/keyboard "
         "control through the embedded scrcpy window, app listing/launch/stop/info/install/uninstall, "
         "navigation, touch/swipe/text/key input, URLs, settings, notifications, quick settings, "
@@ -601,7 +627,7 @@ TOOL = {
                 "type": "STRING",
                 "description": (
                     "status | connect | disconnect | cast | cast_start | cast_stop | cast_status | "
-                    "apps | launch | force_stop | app_info | install | uninstall | key | home | back | "
+                    "unlock | unlock_assist | apps | launch | force_stop | app_info | install | uninstall | key | home | back | "
                     "recents | power | wake | tap | swipe | type | open_url | current_app | open_settings | "
                     "notifications | quick_settings | volume | brightness | storage | push | pull | ui_tree | ui_click | screenshot"
                 )
