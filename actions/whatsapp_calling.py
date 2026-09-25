@@ -1409,7 +1409,7 @@ def _accept_and_speak(
     _set_pending(None)
     _set_call_active(False)
 
-    if not _wait_for_connected_call(30.0):
+    if not _wait_for_connected_call(60.0):
         return (
             f"Accepted the {call_type} call from {caller}, but it did not reach "
             "a connected-call state within 30 seconds."
