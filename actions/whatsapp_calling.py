@@ -45,6 +45,20 @@ except Exception:
     _search_in_app = None
     send_message = None
 
+try:
+    from actions.open_app import (
+        _launch_registered_app,
+        _launch_windows_app_registration,
+    )
+except Exception:
+    _launch_registered_app = None
+    _launch_windows_app_registration = None
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
 
 @dataclass
 class PendingCall:
