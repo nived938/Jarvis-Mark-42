@@ -988,6 +988,15 @@ class JarvisLive:
 
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
 
+        # WhatsApp calling owns its incoming-call watcher in the action module.
+        # Bind JARVIS's speech/UI callbacks once at startup so incoming calls are
+        # announced even before the user has made an outgoing call.
+        try:
+            from actions.whatsapp_calling import bind_runtime as _bind_whatsapp_call_runtime
+            _bind_whatsapp_call_runtime(player=self.ui, speak=self.speak)
+        except Exception as exc:
+            print(f"[WhatsApp Calling] Start failed: {exc}")
+
         # ── Wake word ────────────────────────────────────────────────────────
         # _awake gates the mic (see _listen_audio) and the background speakers.
         # It is True whenever wake word is OFF, so default behaviour is unchanged.
@@ -1285,6 +1294,88 @@ class JarvisLive:
         low = raw.casefold()
         if not raw:
             return False
+
+        # WhatsApp call responses are kept local so a short spoken "accept" or
+        # "decline" never gets mistaken for a normal conversational reply.
+        # They are consumed only while an incoming WhatsApp call is pending.
+        try:
+            from actions.whatsapp_calling import (
+                has_pending_call as _wa_has_pending_call,
+                respond_pending_call as _wa_respond_pending_call,
+            )
+            if _wa_has_pending_call():
+                if low in {
+                    "accept",
+                    "answer",
+                    "accept call",
+                    "answer call",
+                    "yes",
+                }:
+                    result = _wa_respond_pending_call(
+                        "accept", player=self.ui, speak=self.speak
+                    )
+                    self.ui.write_log("SYS: " + str(result))
+                    self.speak("Sir, " + str(result))
+                    return True
+
+                if low in {
+                    "decline",
+                    "reject",
+                    "decline call",
+                    "reject call",
+                    "no",
+                }:
+                    result = _wa_respond_pending_call(
+                        "decline", player=self.ui, speak=self.speak
+                    )
+                    self.ui.write_log("SYS: " + str(result))
+                    self.speak("Sir, " + str(result))
+                    return True
+
+                decline_msg = _re.fullmatch(
+                    r"(?:decline|reject)(?: the call)? and (?:message|text) (?:them )?(.+)",
+                    raw,
+                    flags=_re.IGNORECASE,
+                )
+                if decline_msg:
+                    message_text = decline_msg.group(1).strip()
+                    result = _wa_respond_pending_call(
+                        "decline",
+                        message_text=message_text,
+                        player=self.ui,
+                        speak=self.speak,
+                    )
+                    self.ui.write_log("SYS: " + str(result))
+                    self.speak("Sir, " + str(result))
+                    return True
+        except Exception as exc:
+            self.ui.write_log(f"ERR: WhatsApp call response failed — {exc}")
+
+        # Exact local routing for the requested WhatsApp calling phrases.
+        video_call = _re.fullmatch(
+            r"(?:whatsapp )?video call (.+)", raw, flags=_re.IGNORECASE
+        )
+        if video_call:
+            result = self._run_local_action(
+                "whatsapp_calling",
+                {"action": "video_call", "contact": video_call.group(1).strip()},
+            )
+            self.speak("Sir, " + str(result))
+            return True
+
+        voice_call = _re.fullmatch(
+            r"(?:whatsapp )?call (.+)", raw, flags=_re.IGNORECASE
+        )
+        if voice_call and voice_call.group(1).strip() not in {
+            "jarvis", "me", "a cab", "an uber", "a taxi", "someone"
+        }:
+            result = self._run_local_action(
+                "whatsapp_calling",
+                {"action": "call", "contact": voice_call.group(1).strip()},
+            )
+            self.speak("Sir, " + str(result))
+            return True
+
         if any(k in low for k in ("wake up jarvis", "wake jarvis")):
             self.wake(reason="local command")
             return True
