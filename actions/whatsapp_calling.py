@@ -625,12 +625,7 @@ def _classify_call_type(texts: list[str]) -> str:
 
 
 def _has_call_duration_timer(labels: list[str]) -> bool:
-    """Return True when the WhatsApp call window shows a running duration timer.
-
-    In the WhatsApp Desktop UI, the same microphone/camera/end-call controls can
-    be visible while the call is still ringing. The reliable UIA change after the
-    other side answers is the elapsed-time label, e.g. "00:02".
-    """
+    """Return True when WhatsApp exposes a running call-duration timer."""
     for label in labels:
         value = str(label or "").strip()
         if re.fullmatch(r"\d{1,3}:\d{2}", value):
@@ -638,42 +633,108 @@ def _has_call_duration_timer(labels: list[str]) -> bool:
     return False
 
 
-def _connected_call_state(win) -> bool:
-    """Return True only when WhatsApp shows that the call is actually connected.
+def _call_ui_snapshot(win) -> tuple[list[str], bool, bool, bool, bool]:
+    """Return UI state signals for a WhatsApp call window.
 
-    Do not use microphone, camera, speaker, or hang-up buttons as the primary
-    signal: those controls are also present in the pre-answer "Ringing..."
-    window. A running duration timer such as "00:02" is the primary signal.
+    Returns:
+        labels,
+        has_duration,
+        is_preconnect,
+        has_call_controls,
+        has_explicit_connected_state
     """
     labels = [_norm(x) for x in _all_visible_text(win)]
     joined = " ".join(labels)
 
-    # Strong positive signal from the connected call window.
-    if _has_call_duration_timer(labels):
-        return True
+    has_duration = _has_call_duration_timer(labels)
 
-    # Accept explicit connected-state text from a WhatsApp build that exposes it.
+    preconnect_markers = (
+        "ringing",
+        "calling",
+        "connecting",
+        "waiting for",
+    )
+    is_preconnect = any(marker in joined for marker in preconnect_markers)
+
+    call_control_markers = (
+        "end call",
+        "hang up",
+        "mute",
+        "unmute",
+        "turn off camera",
+        "turn on camera",
+        "video off",
+        "video on",
+    )
+    has_call_controls = any(marker in joined for marker in call_control_markers)
+
     connected_markers = (
         "connected",
         "call in progress",
         "in call",
         "on call",
     )
-    if any(marker in joined for marker in connected_markers):
+    has_explicit_connected_state = any(marker in joined for marker in connected_markers)
+
+    return (
+        labels,
+        has_duration,
+        is_preconnect,
+        has_call_controls,
+        has_explicit_connected_state,
+    )
+
+
+def _connected_call_state(win) -> bool:
+    """Strict connected-call detection using positive connected-state evidence."""
+    (
+        _labels_seen,
+        has_duration,
+        is_preconnect,
+        has_call_controls,
+        has_explicit_connected_state,
+    ) = _call_ui_snapshot(win)
+
+    if has_duration or has_explicit_connected_state:
         return True
 
-    # Explicitly reject the pre-answer states.
-    ringing_markers = (
-        "ringing",
-        "calling",
-        "connecting",
-        "waiting for",
-    )
-    if any(marker in joined for marker in ringing_markers):
+    if is_preconnect:
         return False
 
-    # Without a duration or explicit connected-state text, do not guess.
+    # Do not guess from buttons alone. The transition-aware waiter below handles
+    # WhatsApp builds where the duration timer is not exposed through UIA.
     return False
+
+
+def _fallback_connected_call_state(
+    win,
+    seen_preconnect: bool,
+) -> bool:
+    """Detect the connected screen when WhatsApp hides its timer from UIA.
+
+    Your WhatsApp screenshots show a reliable visual transition:
+      Ringing...  ->  call-duration screen (00:02, 00:03, ...)
+    Both states keep microphone/end-call controls, so controls alone cannot be
+    used. We therefore require that the call was observed in a pre-connect state
+    first, and then the same call window remains with those controls after the
+    ringing/calling text disappears.
+    """
+    (
+        _labels_seen,
+        has_duration,
+        is_preconnect,
+        has_call_controls,
+        has_explicit_connected_state,
+    ) = _call_ui_snapshot(win)
+
+    if has_duration or has_explicit_connected_state:
+        return True
+
+    if is_preconnect:
+        return False
+
+    return bool(seen_preconnect and has_call_controls)
+
 
 
 def _set_call_active(active: bool) -> None:
@@ -783,19 +844,54 @@ def _monitor_loop() -> None:
                 # should never contend with a full UIA tree walk from this watcher.
                 continue
 
-            # Scan all visible WhatsApp windows for a connected call. The active
-            # call may live in a separate floating window, so it cannot depend on
-            # _incoming_window() returning a banner window.
+            # Scan all visible WhatsApp windows. The active call can live in
+            # a separate floating window, so this watcher must inspect every
+            # WhatsApp top-level window, not just the incoming-call banner.
             windows = _whatsapp_windows()
-            connected = any(_connected_call_state(candidate) for candidate in windows)
             now = time.monotonic()
-            if connected:
+            connected = False
+            any_call_ui = False
+            preconnect_visible = False
+
+            for candidate in windows:
+                try:
+                    (
+                        _labels_seen,
+                        has_duration,
+                        is_preconnect,
+                        has_controls,
+                        explicit_connected,
+                    ) = _call_ui_snapshot(candidate)
+
+                    if has_duration or explicit_connected:
+                        connected = True
+                        any_call_ui = True
+                        break
+
+                    if is_preconnect:
+                        any_call_ui = True
+                        preconnect_visible = True
+                    elif has_controls:
+                        any_call_ui = True
+                except Exception:
+                    pass
+
+            if preconnect_visible:
+                # Remember that the WhatsApp call was seen before answering.
+                _last_connected_seen = 0.0
+                _set_call_active(False)
+            elif connected:
                 _last_connected_seen = now
                 _set_call_active(True)
+            elif any_call_ui and _last_connected_seen == 0.0:
+                # The timer may be hidden from UIA, but the transition from a
+                # previously ringing window to a persistent call-control window
+                # is handled by the action's waiter. Do not claim connected here.
+                pass
             elif _last_connected_seen and now - _last_connected_seen > 2.0:
                 # UIA can briefly lose the call controls while WhatsApp redraws.
-                # Only clear call mode after a short continuous absence.
                 _set_call_active(False)
+                _last_connected_seen = 0.0
 
             win, caller, call_type = _incoming_window()
 
@@ -1064,28 +1160,71 @@ def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
         _OUTGOING_CALL_LOCK.release()
 
 def _wait_for_connected_call(timeout: float = 60.0) -> bool:
-    """Wait until a visible WhatsApp call window is genuinely connected.
-
-    The caller may take a while to answer. Never speak merely because the
-    outgoing window is showing "Ringing..." or because microphone/end-call
-    controls exist. Speaking starts only after the connected-state detector sees
-    a call duration timer or explicit connected-state text.
-    """
+    """Wait until the outgoing/incoming WhatsApp call is actually connected."""
     deadline = time.monotonic() + max(1.0, float(timeout))
+    seen_preconnect = False
     last_state = None
+    stable_connected_since = None
 
     while time.monotonic() < deadline:
         windows = _whatsapp_windows()
         connected = False
+        current_has_call_window = False
+
         for win in windows:
             try:
-                if _connected_call_state(win):
+                labels, has_duration, is_preconnect, has_controls, explicit = _call_ui_snapshot(win)
+                if has_duration or explicit:
                     connected = True
+                    current_has_call_window = True
                     break
+
+                if is_preconnect:
+                    seen_preconnect = True
+                    current_has_call_window = True
+                    continue
+
+                if has_controls:
+                    current_has_call_window = True
+                    if _fallback_connected_call_state(win, seen_preconnect):
+                        connected = True
+                        break
             except Exception:
                 pass
 
-        state = "connected" if connected else "waiting"
+        if connected:
+            if stable_connected_since is None:
+                stable_connected_since = time.monotonic()
+        else:
+            stable_connected_since = None
+
+        # Require the post-ringing state to persist briefly. This prevents a
+        # transient UI redraw from being mistaken for an answered call.
+        confirmed = bool(
+            connected
+            and stable_connected_since is not None
+            and time.monotonic() - stable_connected_since >= 0.75
+        )
+
+        if confirmed:
+            player = None
+            with _runtime_lock:
+                player = _runtime_player
+            if player and last_state != "connected":
+                try:
+                    player.write_log(
+                        "SYS: WhatsApp call state: CONNECTED — preparing caller speech."
+                    )
+                except Exception:
+                    pass
+            _set_call_active(True)
+            return True
+
+        if current_has_call_window:
+            state = "ringing" if not connected else "confirming"
+        else:
+            state = "waiting"
+
         if state != last_state:
             last_state = state
             player = None
@@ -1093,20 +1232,27 @@ def _wait_for_connected_call(timeout: float = 60.0) -> bool:
                 player = _runtime_player
             if player:
                 try:
-                    player.write_log(
-                        "SYS: WhatsApp call state: "
-                        + ("CONNECTED — preparing caller speech." if connected
-                           else "WAITING — call has not been answered yet.")
-                    )
+                    messages = {
+                        "ringing": "SYS: WhatsApp call state: RINGING — waiting for the other person to answer.",
+                        "confirming": "SYS: WhatsApp call state: CALL UI changed — confirming connection.",
+                        "waiting": "SYS: WhatsApp call state: WAITING — looking for the WhatsApp call window.",
+                    }
+                    player.write_log(messages[state])
                 except Exception:
                     pass
 
-        if connected:
-            _set_call_active(True)
-            return True
-
         time.sleep(0.25)
 
+    player = None
+    with _runtime_lock:
+        player = _runtime_player
+    if player:
+        try:
+            player.write_log(
+                "SYS: WhatsApp call state: TIMEOUT — call was not confirmed as connected; no speech sent."
+            )
+        except Exception:
+            pass
     return False
 
 
