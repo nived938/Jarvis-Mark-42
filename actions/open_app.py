@@ -17,6 +17,44 @@ _BASE_DIR = Path(__file__).resolve().parent.parent
 _APP_REGISTRY_PATH = _BASE_DIR / "memory" / "app_registry.json"
 
 
+def _windows_known_app_candidates(app_name: str) -> list[Path]:
+    """Return explicit Windows app executables that should beat generic registry matches."""
+    if _SYSTEM != "Windows":
+        return []
+
+    key = str(app_name or "").strip().casefold()
+    if key not in {"whatsapp", "whatsapp desktop"}:
+        return []
+
+    candidates: list[Path] = [
+        Path(r"C:\\Program Files\\WindowsApps\\5319275A.WhatsAppDesktop_2.2636.100.0_x64__cv1g1gvanyjgm\\WhatsApp.Root.exe"),
+    ]
+
+    # Microsoft Store package versions can change after an update, so also
+    # discover the currently installed WhatsApp.Root.exe when possible.
+    windows_apps = Path(r"C:\\Program Files\\WindowsApps")
+    try:
+        candidates.extend(
+            package_dir / "WhatsApp.Root.exe"
+            for package_dir in windows_apps.glob("5319275A.WhatsAppDesktop_*_x64__cv1g1gvanyjgm")
+        )
+    except OSError:
+        pass
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                candidate_key = str(candidate).casefold()
+                if candidate_key not in seen:
+                    seen.add(candidate_key)
+                    unique.append(candidate)
+        except OSError:
+            continue
+    return unique
+
+
 def _load_app_registry() -> list[dict]:
     """Load the machine-local executable registry created by JARVIS."""
     try:
@@ -63,9 +101,12 @@ def _registry_candidates(app_name: str) -> list[Path]:
 
         # Allow natural phrases such as "open VS Code" to match a registry
         # entry named "code", while keeping exact matches ahead of fuzzy ones.
-        if query and (query in name_key or name_key in query):
+        # Only allow containment for meaningful app names. Very short
+        # executable names such as "at.exe" must not match unrelated apps
+        # such as WhatsApp just because "at" appears inside "whatsapp".
+        if len(name_key) >= 4 and query and (query in name_key or name_key in query):
             score += 35
-        if normalized_query and (
+        if len(name_key) >= 4 and normalized_query and (
             normalized_query.casefold() in name_key
             or name_key in normalized_query.casefold()
         ):
@@ -145,7 +186,8 @@ def _launch_windows_app_registration(app_name: str) -> str | None:
 
 def _launch_registered_app(app_name: str) -> Path | None:
     """Launch the registered executable directly, without Windows Search."""
-    for exe in _registry_candidates(app_name):
+    candidates = _windows_known_app_candidates(app_name) + _registry_candidates(app_name)
+    for exe in candidates:
         try:
             subprocess.Popen(
                 [str(exe)],
