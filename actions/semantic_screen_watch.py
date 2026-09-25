@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import mss
+import mss.tools
 import numpy as np
 
 from core import gemini
