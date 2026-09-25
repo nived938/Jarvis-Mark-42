@@ -3541,17 +3541,36 @@ class AndroidCastHudView(QWidget):
             SWP_NOACTIVATE = 0x0010
             SWP_SHOWWINDOW = 0x0040
             SWP_NOOWNERZORDER = 0x0200
-
             width = max(1, int(self._host.width()))
             height = max(1, int(self._host.height()))
 
             if self._foreign_overlay_mode:
-                # Cross-process SetParent() can be rejected by Windows when the
-                # two processes have incompatible window/DPI contexts. In that
-                # case keep the real scrcpy HWND alive and place it     def attach_native_window(self, hwnd: int) -> bool:
+                top_left = self._host.mapToGlobal(QPoint(0, 0))
+                user32.SetWindowPos(
+                    ctypes.wintypes.HWND(hwnd),
+                    ctypes.wintypes.HWND(0),
+                    int(top_left.x()),
+                    int(top_left.y()),
+                    width,
+                    height,
+                    SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER,
+                )
+            else:
+                SWP_NOZORDER = 0x0004
+                user32.SetWindowPos(
+                    ctypes.wintypes.HWND(hwnd),
+                    ctypes.wintypes.HWND(0),
+                    0, 0, width, height,
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                )
+        except Exception:
+            pass
+
+    def attach_native_window(self, hwnd: int) -> bool:
         if os.name != "nt" or not hwnd:
             self.set_status("UNAVAILABLE")
             return False
+
         try:
             self.detach_native_window()
 
@@ -3589,12 +3608,12 @@ class AndroidCastHudView(QWidget):
             original_parent = int(
                 user32.GetParent(ctypes.wintypes.HWND(hwnd)) or 0
             )
-            original_style = int(user32.GetWindowLongPtrW(
-                ctypes.wintypes.HWND(hwnd), GWL_STYLE
-            ))
-            original_exstyle = int(user32.GetWindowLongPtrW(
-                ctypes.wintypes.HWND(hwnd), GWL_EXSTYLE
-            ))
+            original_style = int(
+                user32.GetWindowLongPtrW(ctypes.wintypes.HWND(hwnd), GWL_STYLE)
+            )
+            original_exstyle = int(
+                user32.GetWindowLongPtrW(ctypes.wintypes.HWND(hwnd), GWL_EXSTYLE)
+            )
 
             child_style = (
                 original_style
@@ -3605,17 +3624,17 @@ class AndroidCastHudView(QWidget):
                 original_exstyle & ~WS_EX_APPWINDOW
             ) | WS_EX_TOOLWINDOW
 
-            # First try true native embedding.
+            # First try real Win32 child-window embedding.
             user32.SetWindowLongPtrW(
                 ctypes.wintypes.HWND(hwnd), GWL_STYLE, child_style
             )
             user32.SetWindowLongPtrW(
                 ctypes.wintypes.HWND(hwnd), GWL_EXSTYLE, child_exstyle
             )
-            previous_parent = int(user32.SetParent(
+            user32.SetParent(
                 ctypes.wintypes.HWND(hwnd),
                 ctypes.wintypes.HWND(host_hwnd),
-            ) or 0)
+            )
 
             actual_parent = int(
                 user32.GetParent(ctypes.wintypes.HWND(hwnd)) or 0
@@ -3642,9 +3661,8 @@ class AndroidCastHudView(QWidget):
                 self.set_status("LIVE • DIRECT CONTROL", ok=True)
                 return True
 
-            # Windows rejected cross-process reparenting. Restore scrcpy to its
-            # original top-level window, then use a synchronized native overlay
-            # instead. The scrcpy renderer remains untouched and fully interactive.
+            # Windows rejected cross-process reparenting. Restore the native
+            # scrcpy window and use an aligned top-level overlay as the fallback.
             try:
                 user32.SetParent(
                     ctypes.wintypes.HWND(hwnd),
