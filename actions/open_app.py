@@ -27,12 +27,12 @@ def _windows_known_app_candidates(app_name: str) -> list[Path]:
         return []
 
     candidates: list[Path] = [
-        Path(r"C:\\Program Files\\WindowsApps\\5319275A.WhatsAppDesktop_2.2636.100.0_x64__cv1g1gvanyjgm\\WhatsApp.Root.exe"),
+        Path(r"C:\Program Files\WindowsApps\5319275A.WhatsAppDesktop_2.2636.100.0_x64__cv1g1gvanyjgm\WhatsApp.Root.exe"),
     ]
 
     # Microsoft Store package versions can change after an update, so also
     # discover the currently installed WhatsApp.Root.exe when possible.
-    windows_apps = Path(r"C:\\Program Files\\WindowsApps")
+    windows_apps = Path(r"C:\Program Files\WindowsApps")
     try:
         candidates.extend(
             package_dir / "WhatsApp.Root.exe"
