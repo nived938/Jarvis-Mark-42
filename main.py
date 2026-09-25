@@ -928,6 +928,9 @@ class JarvisLive:
         self._last_local_command = ""
         self._last_local_command_time = 0.0
         self._no_progress = NoProgressGuard(repeat_limit=3)
+        # Guard against Gemini issuing the same WhatsApp outgoing-call tool
+        # twice for one spoken request, often with different capitalization.
+        self._whatsapp_call_guard: dict[tuple[str, str], float] = {}
         self._trace_id = trace_start_session()
 
         self._client_turn_started = 0.0
@@ -2709,6 +2712,29 @@ class JarvisLive:
                 name=name,
                 response={"result": "Emergency stop is active. Action not performed.", "blocked": True},
             )
+
+        # Gemini can occasionally emit a second outgoing-call tool request after
+        # the first one already started the call. Treat contact names
+        # case-insensitively and suppress repeats for a short protected window.
+        if name == "whatsapp_calling":
+            _wa_action = str(args.get("action", "") or "").strip().casefold()
+            if _wa_action in {"call", "voice_call", "audio_call", "video_call", "video"}:
+                _wa_contact = " ".join(str(args.get("contact", "") or "").strip().casefold().split())
+                _wa_key = (_wa_action, _wa_contact)
+                _wa_now = time.monotonic()
+                _wa_last = self._whatsapp_call_guard.get(_wa_key, 0.0)
+                if _wa_contact and (_wa_now - _wa_last) < 90.0:
+                    result = (
+                        f"WhatsApp call to {_wa_contact} was already started from the "
+                        "current request. Do not call the contact again."
+                    )
+                    self.ui.write_log("SYS: " + result)
+                    return types.FunctionResponse(
+                        id=fc.id,
+                        name=name,
+                        response={"result": result, "blocked": True, "duplicate": True},
+                    )
+                self._whatsapp_call_guard[_wa_key] = _wa_now
 
         # Lifecycle tools require an explicit user phrase ending in "jarvis".
         # This is a hard guard against an LLM interpreting "close" as shutdown.
