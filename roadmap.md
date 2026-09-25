@@ -105,20 +105,35 @@ action architecture and can also be rendered through the shared HUD result path.
 - keep background services from injecting unrelated Live turns
 - make tool calls announce work only when genuinely useful
 
-### 3. Context integration
+### 3. Gmail / personal context
+
+- Full Gmail send/reply/forward/draft/label/archive controls
+- smart Gmail triage
+- persistent people profiles linked to Gmail and Calendar
+- actionable notification controls
+
+### 4. Context integration
 
 - improve Explorer integration on modern Windows 11
 - consider a packaged `IExplorerCommand` implementation for a true new-menu item
 - improve selected-text context extraction
 - add richer file previews
 
-### 4. Reliability
+### 5. Reliability
 
 - add automated action-import tests
 - add a smoke test for every discoverable `TOOL`
 - add mocked Live-session tests
 - add monitor/window-control tests
 - add background-service lifecycle tests
+
+## Newly implemented on this branch
+
+- Full Gmail action agent
+- Smart Gmail triage
+- People Intelligence
+- Continuous semantic Screen Watch
+- Actionable Notification Intelligence
 
 ## Medium-term
 
