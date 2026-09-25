@@ -3516,6 +3516,16 @@ class AndroidCastHudView(QWidget):
         self._foreign_exstyle = None
         self._foreign_overlay_mode = False
 
+        # Cross-process overlay mode needs to follow the JARVIS window even
+        # when the user moves the main window without resizing it.
+        self._overlay_sync_timer = QTimer(self)
+        self._overlay_sync_timer.timeout.connect(self._sync_overlay_position)
+        self._overlay_sync_timer.start(40)
+
+    def _sync_overlay_position(self) -> None:
+        if self._foreign_overlay_mode and self._foreign_hwnd:
+            self._resize_native_window()
+
     def set_status(self, text: str, ok: bool = False) -> None:
         self._status.setText(str(text).upper())
         self._status.setStyleSheet(
