@@ -22,7 +22,7 @@ else:
     _WIN_HIDE: dict = {}
 
 from PyQt6.QtCore import (
-    QEasingCurve, QEvent, QLineF, QMimeData, QObject, QParallelAnimationGroup, QPoint, QPointF,
+    QEasingCurve, QEvent, QLineF, QMimeData, QObject, QParallelAnimationGroup, QPointF,
     QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, QUrl, pyqtSignal,
 )
 from PyQt6.QtGui import (
@@ -3435,9 +3435,10 @@ def _find_window_for_process(pid: int, title: str = "") -> int:
 class AndroidCastHudView(QWidget):
     """Full-center Android mirror hosted inside the JARVIS HUD.
 
-    scrcpy owns the real renderer. On Windows its native top-level HWND is
-    re-parented into the HUD host frame so it is a real child of JARVIS rather
-    than a second desktop window. Mouse and keyboard input stay native.
+    scrcpy remains the real renderer and controller. Qt wraps its native
+    Windows HWND as a foreign QWindow and hosts it through
+    QWidget.createWindowContainer(), which is Qt's supported foreign-window
+    embedding path.
     """
 
     closed = pyqtSignal()
@@ -3488,8 +3489,6 @@ class AndroidCastHudView(QWidget):
         root.addWidget(self._hint)
 
         self._host = QFrame()
-        # scrcpy is a foreign Win32 window. Force a native Qt host HWND so
-        # SetParent() always has a stable parent to attach to.
         self._host.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         self._host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._host.setStyleSheet(
@@ -3499,32 +3498,19 @@ class AndroidCastHudView(QWidget):
         self._host_layout.setContentsMargins(0, 0, 0, 0)
         self._host_layout.setSpacing(0)
 
-        self._placeholder = QLabel(
-            "ANDROID CAST\n\nWaiting for scrcpy…"
-        )
+        self._placeholder = QLabel("ANDROID CAST\n\nWaiting for scrcpy…")
         self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._placeholder.setFont(QFont("Courier New", 12, QFont.Weight.Bold))
         self._placeholder.setStyleSheet(
             f"color: {C.PRI_DIM}; background: #000000; border: none;"
         )
         self._host_layout.addWidget(self._placeholder)
+
         root.addWidget(self._host, stretch=1)
 
         self._foreign_hwnd = 0
-        self._foreign_parent = 0
-        self._foreign_style = None
-        self._foreign_exstyle = None
-        self._foreign_overlay_mode = False
-
-        # Cross-process overlay mode needs to follow the JARVIS window even
-        # when the user moves the main window without resizing it.
-        self._overlay_sync_timer = QTimer(self)
-        self._overlay_sync_timer.timeout.connect(self._sync_overlay_position)
-        self._overlay_sync_timer.start(40)
-
-    def _sync_overlay_position(self) -> None:
-        if self._foreign_overlay_mode and self._foreign_hwnd:
-            self._resize_native_window()
+        self._foreign_window: QWindow | None = None
+        self._foreign_container: QWidget | None = None
 
     def set_status(self, text: str, ok: bool = False) -> None:
         self._status.setText(str(text).upper())
@@ -3532,41 +3518,8 @@ class AndroidCastHudView(QWidget):
             f"color: {C.GREEN if ok else C.ACC}; background: transparent;"
         )
 
-    def _resize_native_window(self) -> None:
-        hwnd = int(self._foreign_hwnd or 0)
-        if os.name != "nt" or not hwnd:
-            return
-        try:
-            user32 = ctypes.windll.user32
-            SWP_NOACTIVATE = 0x0010
-            SWP_SHOWWINDOW = 0x0040
-            SWP_NOOWNERZORDER = 0x0200
-            width = max(1, int(self._host.width()))
-            height = max(1, int(self._host.height()))
-
-            if self._foreign_overlay_mode:
-                top_left = self._host.mapToGlobal(QPoint(0, 0))
-                user32.SetWindowPos(
-                    ctypes.wintypes.HWND(hwnd),
-                    ctypes.wintypes.HWND(0),
-                    int(top_left.x()),
-                    int(top_left.y()),
-                    width,
-                    height,
-                    SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER,
-                )
-            else:
-                SWP_NOZORDER = 0x0004
-                user32.SetWindowPos(
-                    ctypes.wintypes.HWND(hwnd),
-                    ctypes.wintypes.HWND(0),
-                    0, 0, width, height,
-                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                )
-        except Exception:
-            pass
-
     def attach_native_window(self, hwnd: int) -> bool:
+        """Wrap an existing native scrcpy HWND and embed it into the HUD."""
         if os.name != "nt" or not hwnd:
             self.set_status("UNAVAILABLE")
             return False
@@ -3574,124 +3527,42 @@ class AndroidCastHudView(QWidget):
         try:
             self.detach_native_window()
 
-            user32 = ctypes.windll.user32
             hwnd = int(hwnd)
-
-            self._host.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
-            host_hwnd = int(self._host.winId() or 0)
-            if not host_hwnd:
-                raise RuntimeError("Could not create the native Qt host HWND.")
-
+            user32 = ctypes.windll.user32
             if not user32.IsWindow(ctypes.wintypes.HWND(hwnd)):
                 raise RuntimeError("scrcpy window is no longer valid.")
 
-            GWL_STYLE = -16
-            GWL_EXSTYLE = -20
-            WS_CHILD = 0x40000000
-            WS_VISIBLE = 0x10000000
-            WS_CAPTION = 0x00C00000
-            WS_THICKFRAME = 0x00040000
-            WS_MINIMIZEBOX = 0x00020000
-            WS_MAXIMIZEBOX = 0x00010000
-            WS_SYSMENU = 0x00080000
-            WS_POPUP = 0x80000000
-            WS_BORDER = 0x00800000
-            WS_CLIPSIBLINGS = 0x04000000
-            WS_CLIPCHILDREN = 0x02000000
-            WS_EX_APPWINDOW = 0x00040000
-            WS_EX_TOOLWINDOW = 0x00000080
-            SWP_FRAMECHANGED = 0x0020
-            SWP_NOZORDER = 0x0004
-            SWP_NOACTIVATE = 0x0010
-            SWP_SHOWWINDOW = 0x0040
+            # Qt officially supports foreign native windows through fromWinId()
+            # and createWindowContainer(). This avoids manually changing SDL's
+            # Win32 parent/style state.
+            foreign = QWindow.fromWinId(hwnd)
+            if foreign is None:
+                raise RuntimeError("Qt could not wrap the scrcpy HWND.")
 
-            original_parent = int(
-                user32.GetParent(ctypes.wintypes.HWND(hwnd)) or 0
-            )
-            original_style = int(
-                user32.GetWindowLongPtrW(ctypes.wintypes.HWND(hwnd), GWL_STYLE)
-            )
-            original_exstyle = int(
-                user32.GetWindowLongPtrW(ctypes.wintypes.HWND(hwnd), GWL_EXSTYLE)
-            )
+            container = QWidget.createWindowContainer(foreign, self._host)
+            if container is None:
+                try:
+                    foreign.setParent(None)
+                except Exception:
+                    pass
+                raise RuntimeError("Qt could not create the scrcpy window container.")
 
-            child_style = (
-                original_style
-                & ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME |
-                    WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_BORDER)
-            ) | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN
-            child_exstyle = (
-                original_exstyle & ~WS_EX_APPWINDOW
-            ) | WS_EX_TOOLWINDOW
-
-            # First try real Win32 child-window embedding.
-            user32.SetWindowLongPtrW(
-                ctypes.wintypes.HWND(hwnd), GWL_STYLE, child_style
+            container.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            container.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Expanding,
             )
-            user32.SetWindowLongPtrW(
-                ctypes.wintypes.HWND(hwnd), GWL_EXSTYLE, child_exstyle
-            )
-            user32.SetParent(
-                ctypes.wintypes.HWND(hwnd),
-                ctypes.wintypes.HWND(host_hwnd),
-            )
-
-            actual_parent = int(
-                user32.GetParent(ctypes.wintypes.HWND(hwnd)) or 0
-            )
-
-            if actual_parent == host_hwnd:
-                self._foreign_hwnd = hwnd
-                self._foreign_parent = original_parent
-                self._foreign_style = original_style
-                self._foreign_exstyle = original_exstyle
-                self._foreign_overlay_mode = False
-
-                self._placeholder.hide()
-                user32.ShowWindow(ctypes.wintypes.HWND(hwnd), 5)
-                user32.SetWindowPos(
-                    ctypes.wintypes.HWND(hwnd),
-                    ctypes.wintypes.HWND(0),
-                    0, 0,
-                    max(1, int(self._host.width())),
-                    max(1, int(self._host.height())),
-                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
-                )
-                self._resize_native_window()
-                self.set_status("LIVE • DIRECT CONTROL", ok=True)
-                return True
-
-            # Windows rejected cross-process reparenting. Restore the native
-            # scrcpy window and use an aligned top-level overlay as the fallback.
-            try:
-                user32.SetParent(
-                    ctypes.wintypes.HWND(hwnd),
-                    ctypes.wintypes.HWND(original_parent),
-                )
-                user32.SetWindowLongPtrW(
-                    ctypes.wintypes.HWND(hwnd), GWL_STYLE, original_style
-                )
-                user32.SetWindowLongPtrW(
-                    ctypes.wintypes.HWND(hwnd), GWL_EXSTYLE, original_exstyle
-                )
-                user32.SetWindowPos(
-                    ctypes.wintypes.HWND(hwnd),
-                    ctypes.wintypes.HWND(0),
-                    0, 0, 1, 1,
-                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
-                )
-            except Exception:
-                pass
+            container.setMinimumSize(1, 1)
 
             self._foreign_hwnd = hwnd
-            self._foreign_parent = original_parent
-            self._foreign_style = original_style
-            self._foreign_exstyle = original_exstyle
-            self._foreign_overlay_mode = True
+            self._foreign_window = foreign
+            self._foreign_container = container
 
+            self._host_layout.addWidget(container, stretch=1)
             self._placeholder.hide()
-            user32.ShowWindow(ctypes.wintypes.HWND(hwnd), 5)
-            self._resize_native_window()
+
+            container.show()
+            QTimer.singleShot(0, container.setFocus)
             self.set_status("LIVE • DIRECT CONTROL", ok=True)
             return True
 
@@ -3699,58 +3570,42 @@ class AndroidCastHudView(QWidget):
             self.set_status("EMBED FAILED")
             try:
                 self._placeholder.setText(
-                    f"ANDROID CAST\n\nCould not attach scrcpy:\n{exc}"
+                    f"ANDROID CAST\n\nCould not embed scrcpy:\n{exc}"
                 )
             except Exception:
                 pass
             return False
 
     def detach_native_window(self) -> None:
-        hwnd = int(self._foreign_hwnd or 0)
-        if os.name == "nt" and hwnd:
+        """Remove the Qt wrapper without closing the real scrcpy process."""
+        foreign = self._foreign_window
+        container = self._foreign_container
+
+        self._foreign_hwnd = 0
+        self._foreign_window = None
+        self._foreign_container = None
+
+        if foreign is not None:
             try:
-                user32 = ctypes.windll.user32
-                GWL_STYLE = -16
-                GWL_EXSTYLE = -20
-                SWP_NOZORDER = 0x0004
-                SWP_NOACTIVATE = 0x0010
-                SWP_SHOWWINDOW = 0x0040
-
-                # Restore the original native parent/styles for a true embedded
-                # window. Overlay mode is already top-level, so only restore
-                # styles/position when needed.
-                if not self._foreign_overlay_mode:
-                    parent = ctypes.wintypes.HWND(int(self._foreign_parent or 0))
-                    user32.SetParent(
-                        ctypes.wintypes.HWND(hwnd),
-                        parent,
-                    )
-                    if self._foreign_style is not None:
-                        user32.SetWindowLongPtrW(
-                            ctypes.wintypes.HWND(hwnd), GWL_STYLE,
-                            int(self._foreign_style)
-                        )
-                    if self._foreign_exstyle is not None:
-                        user32.SetWindowLongPtrW(
-                            ctypes.wintypes.HWND(hwnd), GWL_EXSTYLE,
-                            int(self._foreign_exstyle)
-                        )
-
-                user32.SetWindowPos(
-                    ctypes.wintypes.HWND(hwnd),
-                    ctypes.wintypes.HWND(0),
-                    0, 0, 1, 1,
-                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                )
+                foreign.setParent(None)
             except Exception:
                 pass
 
-        self._foreign_hwnd = 0
-        self._foreign_parent = 0
-        self._foreign_style = None
-        self._foreign_exstyle = None
-        self._foreign_overlay_mode = False
+        if container is not None:
+            try:
+                self._host_layout.removeWidget(container)
+            except Exception:
+                pass
+            try:
+                container.setParent(None)
+            except Exception:
+                pass
+            container.deleteLater()
+
         self._placeholder.show()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
 
     def reset(self) -> None:
         self.detach_native_window()
