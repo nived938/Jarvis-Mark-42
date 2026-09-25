@@ -794,6 +794,14 @@ def _prepare_contact_call(contact: str, video: bool, player=None) -> str:
                 "found. Check that the app is running and signed in."
             )
 
+        # Never start another outgoing call while WhatsApp already exposes its
+        # active-call UI. This protects against a duplicate model tool call.
+        try:
+            if _outgoing_call_state(win):
+                return "A WhatsApp call is already active. I will not start another call."
+        except Exception:
+            pass
+
         _focus_whatsapp(win)
         time.sleep(0.3)
 
@@ -975,9 +983,10 @@ TOOL = {
         "asks the user whether to accept or decline. Use accept/answer or "
         "decline/reject for the user's response. If the user says 'decline and "
         "message them I am busy', decline the call first and then use the existing "
-        "send_message action to send that exact message to the caller. Do not claim "
-        "a call started or ended unless the WhatsApp button was actually found "
-        "and clicked."
+        "send_message action to send that exact message to the caller. For one user "
+        "request, start an outgoing call at most once. Do not issue a second call "
+        "tool request after a successful start. Do not claim a call started or ended "
+        "unless the WhatsApp button was actually found and clicked."
     ),
     "parameters": {
         "type": "OBJECT",
