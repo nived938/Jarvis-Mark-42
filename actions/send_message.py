@@ -5,6 +5,11 @@ import time
 from pathlib import Path
 
 try:
+    from actions.open_app import _launch_registered_app
+except Exception:
+    _launch_registered_app = None
+
+try:
     import pyautogui
     pyautogui.FAILSAFE = True
     pyautogui.PAUSE    = 0.06
@@ -69,6 +74,16 @@ def _open_app(app_name: str) -> bool:
 
     try:
         if os_name == "windows":
+            # Reuse JARVIS's executable registry. Messaging must never need to
+            # type an application name into Windows Search.
+            if _launch_registered_app is not None:
+                try:
+                    if _launch_registered_app(app_name) is not None:
+                        return True
+                except Exception as exc:
+                    print(f"[SendMessage] Direct app launch failed: {exc}")
+
+            # Legacy fallback for an app that is not present in the registry.
             pyautogui.press("win")
             time.sleep(0.5)
             _paste_text(app_name)
