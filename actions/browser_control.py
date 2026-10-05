@@ -835,6 +835,66 @@ class _BrowserSession:
         except Exception as e:
             return f"Reload error: {e}"
 
+    async def list_tabs(self) -> str:
+        page = await self._get_page()
+        pages = list(self._context.pages)
+        lines = []
+        for i, tab in enumerate(pages):
+            try:
+                title = (await tab.title()).strip()
+            except Exception:
+                title = ""
+            marker = " <- active" if tab == page else ""
+            lines.append(f"{i}: {title or '(untitled)'} | {tab.url}{marker}")
+        return "Browser tabs:\n" + "\n".join(lines)
+
+    async def switch_tab(self, index: int) -> str:
+        pages = list(self._context.pages)
+        try:
+            index = int(index)
+        except (TypeError, ValueError):
+            return "Invalid tab index."
+        if index < 0 or index >= len(pages):
+            return f"Tab index out of range: {index}."
+        self._page = pages[index]
+        await self._page.bring_to_front()
+        return f"Active tab: {index} | {self._page.url}"
+
+    async def wait_for(self, description: str) -> str:
+        page = await self._get_page()
+        desc = str(description or "").strip()
+        if not desc:
+            return "No element description provided."
+        deadline = asyncio.get_running_loop().time() + 15
+        while asyncio.get_running_loop().time() < deadline:
+            for locator in (
+                page.get_by_role("button", name=desc),
+                page.get_by_role("link", name=desc),
+                page.get_by_text(desc, exact=False),
+                page.get_by_label(desc, exact=False),
+                page.get_by_placeholder(desc, exact=False),
+                page.locator(f'[aria-label*="{desc}" i],[title*="{desc}" i]'),
+            ):
+                try:
+                    if await locator.count() > 0:
+                        return f"Element ready: '{desc}'"
+                except Exception:
+                    pass
+            await asyncio.sleep(0.25)
+        return f"Element did not appear within 15s: '{desc}'"
+
+    async def page_info(self) -> str:
+        page = await self._get_page()
+        try:
+            title = await page.title()
+        except Exception:
+            title = ""
+        try:
+            text = await page.inner_text("body")
+        except Exception:
+            text = ""
+        snippet = " ".join(text.split())[:1200]
+        return f"URL: {page.url}\nTitle: {title}\nVisible text: {snippet}"
     async def close_browser(self) -> str:
         await self._async_close()
         return f"{self.browser_name} closed."
@@ -1063,13 +1123,13 @@ def _log(player, text: str):
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
 TOOL = {
     "name": "browser_control",
-    "description": "Controls any web browser. Use for: opening websites, searching the web, clicking elements, filling forms, scrolling, screenshots, navigation, any web-based task. Simple open/search requests launch the user's own browser normally (their real profile and logged-in accounts); interactive actions (click, type, fill_form...) attach an automation browser. Always pass the 'browser' parameter when the user specifies a browser (e.g. 'open in Edge', 'use Firefox', 'open Chrome'). Multiple browsers can run simultaneously.",
+    "description": "Controls any web browser. Use for opening websites, searching, DOM-aware clicking/typing/forms, tabs, page inspection, waiting for elements, screenshots, navigation and web tasks. Prefer smart DOM actions before coordinate-like interaction. Simple open/search requests launch the user's own browser normally (their real profile and logged-in accounts); interactive actions (click, type, fill_form...) attach an automation browser. Always pass the 'browser' parameter when the user specifies a browser (e.g. 'open in Edge', 'use Firefox', 'open Chrome'). Multiple browsers can run simultaneously.",
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": "go_to | search | click | type | scroll | fill_form | smart_click | smart_type | get_text | get_url | press | new_tab | close_tab | screenshot | back | forward | reload | switch | list_browsers | close | close_all"
+                "description": "go_to | search | click | type | scroll | fill_form | smart_click | smart_type | get_text | get_url | press | new_tab | close_tab | list_tabs | switch_tab | wait_for | page_info | screenshot | back | forward | reload | switch | list_browsers | close | close_all"
             },
             "browser": {
                 "type": "STRING",
@@ -1110,6 +1170,10 @@ TOOL = {
             "key": {
                 "type": "STRING",
                 "description": "Key name for press action (e.g. Enter, Escape, F5)"
+            },
+            "tab_index": {
+                "type": "INTEGER",
+                "description": "Tab index for switch_tab."
             },
             "path": {
                 "type": "STRING",

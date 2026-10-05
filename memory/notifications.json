@@ -1,0 +1,43 @@
+{
+  "items": [
+    {
+      "id": "cbda35a8e1",
+      "title": "System monitor",
+      "message": "[SYSTEM_ALERT] GPU load is at 100%. Briefly inform the user in their language.",
+      "source": "system_monitor",
+      "created": "2026-09-24T10:33:05",
+      "last_created": "2026-09-24T10:33:05",
+      "_created_epoch": 1790226185.7151585,
+      "count": 1,
+      "category": "important",
+      "priority": 3,
+      "read": false
+    },
+    {
+      "id": "e619718bac",
+      "title": "System monitor",
+      "message": "[SYSTEM_ALERT] CPU usage has been critically high (100%) for several seconds. Warn the user in their language and suggest closing heavy applications.",
+      "source": "system_monitor",
+      "created": "2026-09-24T10:34:27",
+      "last_created": "2026-09-24T10:34:27",
+      "_created_epoch": 1790226267.6160955,
+      "count": 1,
+      "category": "critical",
+      "priority": 4,
+      "read": false
+    },
+    {
+      "id": "2423052644",
+      "title": "System monitor",
+      "message": "[SYSTEM_ALERT] GPU load is at 100%. Briefly inform the user in their language.",
+      "source": "system_monitor",
+      "created": "2026-09-24T11:35:10",
+      "last_created": "2026-09-24T11:35:10",
+      "_created_epoch": 1790229910.6259835,
+      "count": 1,
+      "category": "important",
+      "priority": 3,
+      "read": false
+    }
+  ]
+}

@@ -114,6 +114,22 @@ def undo_last() -> str:
     return f"Undone: {entry.label}." + (f" {detail}" if detail else "")
 
 
+def undo_steps(count: int = 1) -> str:
+    """Undo up to count recent reversible operations in newest-first order."""
+    try:
+        count = max(1, min(int(count), MAX_DEPTH))
+    except (TypeError, ValueError):
+        count = 1
+    results = []
+    for _ in range(count):
+        with _lock:
+            if not _stack:
+                break
+        results.append(undo_last())
+    if not results:
+        return "There is nothing to undo."
+    return "\n".join(results)
+
 def clear() -> None:
     """Forget the stack. Called when the app shuts down so closures holding old
     file contents do not outlive the session."""

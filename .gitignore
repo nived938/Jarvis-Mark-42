@@ -18,6 +18,11 @@ config/whatsapp_web/          # a LINKED WhatsApp session — committing it hand
 # ── Personal data the assistant accumulates about you ─────────────────────────
 memory/long_term.json
 memory/*.db
+memory/self_modification.json
+memory/self_modification_backups/
+memory/execution_traces/
+memory/app_crash_guardian.json
+memory/desktop_scenes.json
 
 # ── Python build noise ────────────────────────────────────────────────────────
 __pycache__/
@@ -52,4 +57,4 @@ screenshots/
 # Local secrets
 config/api_keys.json
 config/certs/*.key
-
+memory/geoapify_map_location.json

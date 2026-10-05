@@ -645,6 +645,56 @@ def get_file_info(path: str, name: str = "") -> str:
     except Exception as e:
         return f"Could not get file info: {e}"
 
+def preview_file_operation(params: dict) -> str:
+    """Return a no-change preview for destructive or bulk file operations."""
+    action = str((params or {}).get("action", "")).lower().strip()
+    path = (params or {}).get("path", "desktop")
+    name = (params or {}).get("name", "")
+    target_text = f"{path}/{name}" if name else str(path)
+    try:
+        target = _resolve_path(path)
+        if name:
+            target = target / name
+    except Exception as e:
+        return f"Preview failed: {e}"
+
+    if action == "organize_desktop":
+        desktop = _get_desktop()
+        ext_groups = {
+            ".jpg": "Images", ".jpeg": "Images", ".png": "Images", ".gif": "Images",
+            ".bmp": "Images", ".webp": "Images", ".pdf": "Documents", ".docx": "Documents",
+            ".txt": "Documents", ".xlsx": "Documents", ".pptx": "Documents",
+            ".mp4": "Videos", ".mkv": "Videos", ".mov": "Videos", ".mp3": "Music",
+            ".wav": "Music", ".zip": "Archives", ".rar": "Archives", ".7z": "Archives",
+            ".py": "Code", ".js": "Code", ".ts": "Code", ".html": "Code",
+            ".css": "Code", ".json": "Code", ".cpp": "Code", ".java": "Code",
+        }
+        planned = []
+        try:
+            for item in desktop.iterdir():
+                if item.is_file() and not item.name.startswith("."):
+                    folder = ext_groups.get(item.suffix.lower(), "Others")
+                    planned.append(f"{item.name} -> {folder}/")
+        except Exception as e:
+            return f"Preview failed: {e}"
+        if not planned:
+            return "Preview: no files would be moved on the desktop."
+        return "Preview only, nothing changed:\n" + "\n".join(planned[:40]) + (
+            f"\n... and {len(planned) - 40} more." if len(planned) > 40 else ""
+        )
+
+    if action in ("delete", "move", "copy", "rename", "write", "create_file", "create_folder"):
+        exists = target.exists()
+        lines = ["Preview only, nothing changed:", f"Action: {action}", f"Target: {target}", f"Exists now: {exists}"]
+        if action in ("move", "copy"):
+            lines.append(f"Destination: {(params or {}).get('destination', '')}")
+        if action == "rename":
+            lines.append(f"New name: {(params or {}).get('new_name', '')}")
+        if action in ("write", "create_file"):
+            content = str((params or {}).get("content", ""))
+            lines.append(f"Content length: {len(content)} characters")
+        return "\n".join(lines)
+
 def file_controller(
     parameters: dict = None,
     response=None,
@@ -653,6 +703,8 @@ def file_controller(
 ) -> str:
     params = parameters or {}
     action = params.get("action", "").lower().strip()
+    if bool(params.get("preview", False)):
+        return preview_file_operation(params)
     path   = params.get("path", "desktop")
     name   = params.get("name", "")
 
@@ -759,6 +811,10 @@ TOOL = {
             "count": {
                 "type": "INTEGER",
                 "description": "Number of results for largest"
+            },
+            "preview": {
+                "type": "BOOLEAN",
+                "description": "If true, show exactly what the operation would change and make no changes."
             }
         },
         "required": [

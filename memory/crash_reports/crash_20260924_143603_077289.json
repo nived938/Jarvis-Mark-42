@@ -1,0 +1,14 @@
+{
+  "timestamp": "2026-09-24T14:36:03.077289+05:30",
+  "source": "main-thread",
+  "thread": "MainThread",
+  "exception_type": "NameError",
+  "exception": "name 'GeoapifyMapsHudView' is not defined",
+  "traceback": "Traceback (most recent call last):\n  File \"E:\\Jarvis-Mark-42\\main.py\", line 3802, in <module>\n    main()\n  File \"E:\\Jarvis-Mark-42\\main.py\", line 3788, in main\n    ui = JarvisUI(\"face.png\")\n         ^^^^^^^^^^^^^^^^^^^^\n  File \"E:\\Jarvis-Mark-42\\ui.py\", line 6537, in __init__\n    self._win = MainWindow(face_path)\n                ^^^^^^^^^^^^^^^^^^^^^\n  File \"E:\\Jarvis-Mark-42\\ui.py\", line 3939, in __init__\n    self._geo_maps_hud = GeoapifyMapsHudView()\n                         ^^^^^^^^^^^^^^^^^^^\nNameError: name 'GeoapifyMapsHudView' is not defined\n",
+  "python": "3.12.10",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "cwd": "E:\\Jarvis-Mark-42",
+  "argv": [
+    "main.py"
+  ]
+}

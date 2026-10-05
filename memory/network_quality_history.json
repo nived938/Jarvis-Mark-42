@@ -1,0 +1,25 @@
+[
+  {
+    "timestamp": "2026-09-24T11:53:47.601706+05:30",
+    "host": "1.1.1.1",
+    "interfaces": [
+      "Ethernet",
+      "vEthernet (Default Switch)",
+      "VMware Network Adapter VMnet1",
+      "VMware Network Adapter VMnet8",
+      "Loopback Pseudo-Interface 1"
+    ],
+    "tcp_probe_count": 4,
+    "tcp_success_count": 4,
+    "packet_loss_percent": 0.0,
+    "avg_latency_ms": 10.2,
+    "min_latency_ms": 5.8,
+    "max_latency_ms": 18.0,
+    "dns_ok": true,
+    "dns_ms": 66.2,
+    "dns_detail": "OK",
+    "https_ok": true,
+    "https_ms": 278.2,
+    "https_detail": "HTTP 204"
+  }
+]

@@ -5,6 +5,8 @@ Zero subprocess calls on all platforms — uses ctypes/pynvml/psutil/wmi only.
 import ctypes
 import platform
 import time
+import socket
+import urllib.request
 
 import psutil
 
@@ -133,6 +135,46 @@ def get_system_status() -> dict:
         "process_count": len(psutil.pids()),
     }
 
+def get_network_diagnostics(host: str = "1.1.1.1") -> str:
+    """Return a read-only network health snapshot without changing any settings."""
+    host = str(host or "1.1.1.1").strip() or "1.1.1.1"
+    lines = [f"Network diagnostics for {host}"]
+
+    try:
+        stats = psutil.net_if_stats()
+        active = [name for name, info in stats.items() if getattr(info, "isup", False)]
+        lines.append("Active interfaces: " + (", ".join(active) if active else "none"))
+    except Exception as e:
+        lines.append(f"Interfaces: unavailable ({e})")
+
+    try:
+        started = time.monotonic()
+        socket.gethostbyname("example.com")
+        ms = (time.monotonic() - started) * 1000
+        lines.append(f"DNS resolution: OK ({ms:.0f} ms)" )
+    except Exception as e:
+        lines.append(f"DNS resolution: FAILED ({e})")
+
+    try:
+        started = time.monotonic()
+        with socket.create_connection((host, 443), timeout=3):
+            pass
+        ms = (time.monotonic() - started) * 1000
+        lines.append(f"TCP {host}:443: OK ({ms:.0f} ms)")
+    except Exception as e:
+        lines.append(f"TCP {host}:443: FAILED ({e})")
+
+    try:
+        started = time.monotonic()
+        req = urllib.request.Request("https://www.google.com/generate_204", method="GET", headers={"User-Agent": "JARVIS"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            status = getattr(resp, "status", 200)
+        ms = (time.monotonic() - started) * 1000
+        lines.append(f"HTTPS: OK ({status}, {ms:.0f} ms)")
+    except Exception as e:
+        lines.append(f"HTTPS: FAILED ({e})")
+
+    return "\n".join(lines)
 
 class SystemMonitor:
     """
